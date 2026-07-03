@@ -1,17 +1,23 @@
 #!/bin/bash
 # Cai dat CUDA runtime + torch + vllm.
 #
-# Co 2 CACH CAI (chon qua PINNED_CUDA_WHEEL):
+# Co 2 CACH CAI (chon qua PINNED_CUDA_WHEEL), MOI CACH DUNG BIEN CUDA RIENG -
+# khong duoc tron voi nhau, vi ban vllm mac dinh (khong suffix CUDA) va ban
+# co suffix (+cuXXX) yeu cau CUDA runtime khac nhau:
 #
 #   PINNED_CUDA_WHEEL=0 (mac dinh, dung cho dev tren Colab): cai torch qua
-#   --extra-index-url roi `pip install vllm==VERSION` (khong suffix CUDA) -
-#   day la cach da chay on dinh tren Colab tu truoc gio.
+#   --extra-index-url roi `pip install vllm==VERSION` (ban mac dinh, khong
+#   suffix CUDA). Ban mac dinh nay LUON duoc bien dich voi CUDA runtime co
+#   dinh la PLAIN_CUDA_VERSION (mac dinh "13.0" - vllm 0.24.0 doi hoi dung
+#   libcudart.so.13). Doi TORCH_VERSION/PLAIN_CUDA_VERSION o day CHU KHONG
+#   PHAI CUDA_VERSION (bien do chi dung cho che do PINNED_CUDA_WHEEL=1).
 #
 #   PINNED_CUDA_WHEEL=1 (dung khi can khop dung mot ban CUDA cu the, vd may
-#   BTC): tai thang wheel `vllm-VERSION+cuXXX-...` tu GitHub Releases. CHU Y:
-#   moi VLLM_VERSION chi publish MOT SO bien the CUDA nhat dinh (vd v0.24.0
-#   chi co +cu129, +cpu, va ban mac dinh - KHONG co +cu128/+cu130). Script se
-#   kiem tra URL ton tai truoc khi cai; neu khong co, xem danh sach that tai
+#   BTC): tai thang wheel `vllm-VERSION+cuXXX-...` tu GitHub Releases theo
+#   CUDA_VERSION. CHU Y: moi VLLM_VERSION chi publish MOT SO bien the CUDA
+#   nhat dinh (vd v0.24.0 chi co +cu129, +cpu, va ban mac dinh - KHONG co
+#   +cu128/+cu130). Script se kiem tra URL ton tai truoc khi cai; neu khong
+#   co, xem danh sach that tai:
 #   https://github.com/vllm-project/vllm/releases/tag/v<VLLM_VERSION>
 #
 # 3 kich ban dung:
@@ -25,14 +31,21 @@
 #      truoc khi chay serve_vllm.sh, xem notebooks/vllm_colab.ipynb)
 set -euo pipefail
 
-CUDA_VERSION="${CUDA_VERSION:-13.0}"         # chap nhan "12.9", "12.9.1", hoac dang nen "129"
+PINNED_CUDA_WHEEL="${PINNED_CUDA_WHEEL:-0}"
 CPU_ARCH="${CPU_ARCH:-x86_64}"
 VLLM_VERSION="${VLLM_VERSION:-0.24.0}"
-TORCH_VERSION="${TORCH_VERSION:-2.11.0}"
 VLLM_MANYLINUX_TAG="${VLLM_MANYLINUX_TAG:-manylinux_2_28}"
-PINNED_CUDA_WHEEL="${PINNED_CUDA_WHEEL:-0}"
+TORCH_VERSION="${TORCH_VERSION:-2.11.0}"
 
 CUDA_KEYRING_URL="${CUDA_KEYRING_URL:-https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb}"
+
+# CUDA_VERSION target khac nhau tuy che do, KHONG dung chung 1 bien de tranh
+# lay nham gia tri con sot lai trong os.environ tu lan chay khac.
+if [ "$PINNED_CUDA_WHEEL" = "1" ]; then
+  CUDA_VERSION="${CUDA_VERSION:-12.9}"
+else
+  CUDA_VERSION="${PLAIN_CUDA_VERSION:-13.0}"
+fi
 
 # Chuan hoa CUDA_VERSION ve major/minor, du nguoi dung truyen "12.9", "12.9.1"
 # (bo qua patch) hay dang nen "129".
@@ -64,7 +77,7 @@ VLLM_WHEEL_URL="${VLLM_WHEEL_URL:-https://github.com/vllm-project/vllm/releases/
 SKIP_CUDA="${SKIP_CUDA:-0}"
 SKIP_PYTHON_DEPS="${SKIP_PYTHON_DEPS:-0}"
 
-echo "==> CUDA_VERSION=${CUDA_VERSION} (${CUDA_DOTTED}) | VLLM_VERSION=${VLLM_VERSION} | SKIP_CUDA=${SKIP_CUDA} | PINNED_CUDA_WHEEL=${PINNED_CUDA_WHEEL}"
+echo "==> PINNED_CUDA_WHEEL=${PINNED_CUDA_WHEEL} | CUDA_VERSION=${CUDA_DOTTED} | VLLM_VERSION=${VLLM_VERSION} | SKIP_CUDA=${SKIP_CUDA}"
 
 if [ "$SKIP_CUDA" != "1" ]; then
   echo "========================================"
@@ -100,7 +113,7 @@ if [ "$SKIP_PYTHON_DEPS" != "1" ]; then
     pip install "$VLLM_WHEEL_URL" --extra-index-url "$TORCH_INDEX_URL"
   else
     echo "========================================"
-    echo "2. DANG DONG BO TORCH ${TORCH_VERSION} (cu${CUDA_COMPACT}) VA VLLM ${VLLM_VERSION}..."
+    echo "2. DANG DONG BO TORCH ${TORCH_VERSION} (cu${CUDA_COMPACT}) VA VLLM ${VLLM_VERSION} (ban mac dinh)..."
     echo "========================================"
     pip install "torch==${TORCH_VERSION}" torchvision torchaudio --extra-index-url "$TORCH_INDEX_URL"
     pip install "vllm==${VLLM_VERSION}" --no-cache-dir
@@ -111,6 +124,7 @@ fi
 
 echo "========================================"
 echo "Setup hoan tat. Dung scripts/serve_vllm.sh de khoi dong server."
-echo "Neu ban vua doi CUDA_VERSION so voi lan chay truoc trong cung session"
-echo "Python (da tung import torch/vllm), HAY RESTART SESSION truoc khi serve."
+echo "Neu ban vua doi PINNED_CUDA_WHEEL/CUDA_VERSION so voi lan chay truoc"
+echo "trong cung session Python (da tung import torch/vllm), HAY RESTART"
+echo "SESSION truoc khi serve."
 echo "========================================"

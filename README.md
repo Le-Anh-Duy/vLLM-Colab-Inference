@@ -19,7 +19,9 @@ Workflow: code/script được viết và version-control ở đây (local), sau
 | **B. Nộp bài cho BTC** | `SKIP_CUDA=1 PINNED_CUDA_WHEEL=1 CUDA_VERSION=12.9 bash scripts/setup_vllm.sh` | **Không đụng vào CUDA hệ thống** (dùng đúng CUDA/driver BTC đã cấp sẵn), pip cài đúng wheel `vllm+cu129` từ GitHub Release khớp CUDA 12.x của họ (có kiểm tra URL tồn tại trước khi cài). |
 | **C. Test trên Colab, giả lập giống lúc nộp** | `PINNED_CUDA_WHEEL=1 CUDA_VERSION=12.9 bash scripts/setup_vllm.sh` | Giống B nhưng vẫn tự `apt install cuda-cudart-12-9` vì Colab không có sẵn CUDA runtime như máy BTC. |
 
-**Về restart session:** nếu đây là lần setup đầu tiên trong một Colab session (kernel chưa từng `import torch`) thì không cần restart, dù chọn kịch bản nào. Nhưng nếu bạn đổi `CUDA_VERSION` *giữa chừng* trong cùng session (vd vừa chạy A xong giờ muốn thử C) thì **bắt buộc phải restart kernel** trước khi serve — mix lib CUDA cũ/mới trong cùng process Python sẽ lỗi. `notebooks/vllm_colab.ipynb` tự phát hiện việc này và tự restart kernel giúp bạn (xem cell 2), bạn chỉ cần chạy lại cell sau khi thấy kernel restart.
+**Quan trọng — 2 biến CUDA tách biệt, không dùng lẫn:** `CUDA_VERSION` chỉ có tác dụng khi `PINNED_CUDA_WHEEL=1` (kịch bản B/C). Ở kịch bản A (`PINNED_CUDA_WHEEL=0`), script dùng `PLAIN_CUDA_VERSION` (mặc định `13.0`, **cố định** vì bản `vllm==VERSION` mặc định luôn được biên dịch với CUDA 13 runtime — set `CUDA_VERSION` sẽ *không* ảnh hưởng gì tới kịch bản A. Set nhầm `CUDA_VERSION` trong khi vẫn ở `PINNED_CUDA_WHEEL=0` từng gây lỗi `libcudart.so.13: cannot open shared object file` do cudart bị cài sai bản.
+
+**Về restart session:** nếu đây là lần setup đầu tiên trong một Colab session (kernel chưa từng `import torch`) thì không cần restart, dù chọn kịch bản nào. Nhưng nếu bạn đổi cấu hình CUDA *giữa chừng* trong cùng session (vd vừa chạy A xong giờ muốn thử C) thì **bắt buộc phải restart kernel** trước khi serve — mix lib CUDA cũ/mới trong cùng process Python sẽ lỗi. `notebooks/vllm_colab.ipynb` tự phát hiện việc này và tự restart kernel giúp bạn (xem cell 2), bạn chỉ cần chạy lại cell sau khi thấy kernel restart.
 
 ## Cấu trúc
 
@@ -48,8 +50,9 @@ Tất cả tham số đều có giá trị mặc định, override bằng cách 
 
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
-| `CUDA_VERSION` | `13.0` | Bản CUDA mục tiêu, dạng `MAJOR.MINOR` (vd `12.9`, `13.0`; patch như `12.9.1` cũng được, bị bỏ qua). Dạng nén `MAJORMINOR` (vd `129`) vẫn được chấp nhận. Suy ra apt package, lib path, torch index và (nếu bật `PINNED_CUDA_WHEEL`) wheel vllm tương ứng. |
-| `PINNED_CUDA_WHEEL` | `0` | `0` = cài kiểu thường (`pip install torch==TORCH_VERSION` qua extra-index rồi `pip install vllm==VLLM_VERSION` bản mặc định — dùng cho dev Colab). `1` = tải đúng wheel `vllm+cuXXX` từ GitHub Release ứng với `CUDA_VERSION` — dùng khi cần khớp chính xác CUDA của môi trường đích (vd BTC), có kiểm tra URL tồn tại trước khi cài. |
+| `PINNED_CUDA_WHEEL` | `0` | `0` = cài kiểu thường (`pip install torch==TORCH_VERSION` qua extra-index rồi `pip install vllm==VLLM_VERSION` bản mặc định — dùng cho dev Colab, CUDA runtime cố định theo `PLAIN_CUDA_VERSION`). `1` = tải đúng wheel `vllm+cuXXX` từ GitHub Release ứng với `CUDA_VERSION` — dùng khi cần khớp chính xác CUDA của môi trường đích (vd BTC), có kiểm tra URL tồn tại trước khi cài. |
+| `PLAIN_CUDA_VERSION` | `13.0` | **Chỉ dùng khi `PINNED_CUDA_WHEEL=0`.** CUDA runtime mà bản `vllm==VLLM_VERSION` mặc định (không suffix) yêu cầu — cố định theo build của vllm, không tự đổi tuỳ ý được trừ khi đổi `VLLM_VERSION` sang bản khác. |
+| `CUDA_VERSION` | `12.9` | **Chỉ dùng khi `PINNED_CUDA_WHEEL=1`.** Bản CUDA mục tiêu, dạng `MAJOR.MINOR` (vd `12.9`; patch như `12.9.1` cũng được, bị bỏ qua). Dạng nén `MAJORMINOR` (vd `129`) vẫn được chấp nhận. Suy ra apt package, lib path, torch index và wheel vllm tương ứng. |
 | `TORCH_VERSION` | `2.11.0` | Version torch, chỉ dùng khi `PINNED_CUDA_WHEEL=0` |
 | `CPU_ARCH` | `x86_64` | Kiến trúc CPU, dùng để dựng URL wheel vllm khi `PINNED_CUDA_WHEEL=1` |
 | `VLLM_VERSION` | `0.24.0` | Version vllm |
