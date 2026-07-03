@@ -33,6 +33,8 @@ except ImportError:
     print("Thieu thu vien httpx. Chay: pip install httpx", file=sys.stderr)
     raise
 
+from scoring import clamp01
+
 
 # --------------------------------------------------------------------------
 # Trace: doc tu file JSONL hoac sinh Poisson process gia lap
@@ -216,10 +218,6 @@ async def run_trace(
 # --------------------------------------------------------------------------
 # ERS scoring - cong thuc lay tu Statement.txt muc 3.2
 # --------------------------------------------------------------------------
-
-
-def clamp01(x: float) -> float:
-    return max(0.0, min(1.0, x))
 
 
 def score_component(value: float, floor: float, ceiling: float, gamma: float) -> float:

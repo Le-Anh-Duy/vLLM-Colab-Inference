@@ -27,9 +27,11 @@ Workflow: code/script được viết và version-control ở đây (local), sau
 
 ```
 scripts/
-  setup_vllm.sh       # cài CUDA runtime + torch + vllm
-  serve_vllm.sh       # khởi động vLLM OpenAI-compatible API server
-  benchmark_traffic.py  # mo phong traffic + do TTFT/TPOT/ERS
+  setup_vllm.sh         # cài CUDA runtime + torch + vllm
+  serve_vllm.sh         # khởi động vLLM OpenAI-compatible API server
+  scoring.py            # công thức chấm điểm dùng chung (ERS clamp, accuracy decay f(Δ))
+  benchmark_traffic.py  # mô phỏng traffic + đo TTFT/TPOT/ERS
+  eval_gpqa.py          # chấm accuracy GPQA Diamond (Accuracy Gate)
 notebooks/
   vllm_colab.ipynb  # clone repo, chạy setup + serve, test + benchmark
 ```
@@ -73,13 +75,15 @@ Tất cả tham số đều có giá trị mặc định, override bằng cách 
 | `MODEL_NAME` | `Qwen/Qwen2.5-1.5B-Instruct` | Model để serve (HuggingFace repo id) |
 | `HOST` | `0.0.0.0` | Bind host |
 | `PORT` | `8000` | Bind port |
-| `GPU_MEMORY_UTILIZATION` | `0.9` | Tỷ lệ VRAM vllm được phép dùng |
+| `GPU_MEMORY_UTILIZATION` | `0.85` | Tỷ lệ VRAM vllm được phép dùng (an toàn cho GPU dành riêng như Colab; xuống thấp hơn nếu chia sẻ GPU với process khác) |
+| `ENABLE_PREFIX_CACHING` | `1` | `0` để tắt (`--no-enable-prefix-caching`) — dùng khi cần A/B so sánh có/không prefix caching. vLLM bản hiện tại đã bật mặc định, cờ này chỉ để chủ động kiểm soát/so sánh. |
+| `KV_CACHE_DTYPE` | *(rỗng = `auto`)* | Set `fp8` để quantize KV cache (Statement.txt mục 5: KV Cache Optimization) — tăng concurrency/context nhưng có thể ảnh hưởng accuracy, **luôn chấm lại bằng `scripts/eval_gpqa.py` sau khi bật**. |
 | `VLLM_EXTRA_ARGS` | *(rỗng)* | Chuỗi tham số bổ sung truyền thẳng cho `vllm.entrypoints.openai.api_server` (vd `--quantization fp8 --max-model-len 4096`) |
 
 Script cũng nhận thêm tham số dòng lệnh trực tiếp, vd:
 
 ```bash
-bash scripts/serve_vllm.sh --enable-prefix-caching
+bash scripts/serve_vllm.sh --max-model-len 4096
 ```
 
 ### `scripts/benchmark_traffic.py`
@@ -99,3 +103,24 @@ python3 scripts/benchmark_traffic.py --trace-file trace.jsonl
 Kết quả in ra console (TTFT/TPOT mean/p50/p95, ERS) và ghi vào `benchmark_results/summary.json` + `per_request.csv`.
 
 **Quan trọng:** các ngưỡng `--floor-ttft`, `--ceil-ttft`, `--floor-tpot`, `--ceil-tpot`, `--w`, `--gamma` hiện là **placeholder** (chưa có số liệu chính thức từ BTC — xem mục 3.2 `Statement.txt`: "*Ngưỡng cụ thể của từng vòng sẽ được công bố*"). Khi BTC công bố, chỉ cần truyền lại qua CLI flag, không cần sửa code. ERS in ra chỉ mang tính tương đối để so sánh giữa các lần tối ưu, không phải điểm thi thật.
+
+### `scripts/eval_gpqa.py`
+
+Chấm accuracy trên GPQA Diamond cho server đang chạy, phục vụ **Accuracy Gate** (mục 3.3 `Statement.txt`) — bắt buộc phải chạy lại script này sau MỖI lần đổi quantization/tối ưu có khả năng ảnh hưởng chất lượng đầu ra (KV cache FP8, weight quantization, speculative decoding...), để biết `Δ` (accuracy drop so với baseline) có vượt ngưỡng bị phạt hay không.
+
+```bash
+pip install httpx
+
+# BTC chua cong bo 100 cau hoi co dinh - dung file JSONL cua rieng ban truoc:
+# {"id": "0", "question": "...", "choices": ["A..","B..","C..","D.."], "answer_index": 2}
+python3 scripts/eval_gpqa.py --questions-file gpqa_diamond.jsonl --baseline-accuracy 70.0
+
+# Hoac tu test bang bo GPQA Diamond public tren HuggingFace (dataset gated,
+# can `pip install datasets` + chap nhan dieu khoan/HF_TOKEN - KHONG phai bo
+# cau hoi BTC dung de cham that):
+python3 scripts/eval_gpqa.py --hf-fallback --num-questions 100
+```
+
+Kết quả in accuracy (%) ra console, và nếu truyền `--baseline-accuracy` sẽ tính luôn `Δ` và hệ số phạt `f(Δ)` theo đúng công thức piecewise trong `Statement.txt`. Ghi chi tiết vào `gpqa_results/summary.json` + `per_question.csv` (kèm câu trả lời thô của model để soát lại khi cần).
+
+**Khi BTC công bố file 100 câu hỏi chính thức:** chỉ cần trỏ `--questions-file` vào file đó, không sửa code. `scripts/scoring.py` chứa chung công thức `f(Δ)` và `clamp01` dùng bởi cả `benchmark_traffic.py` và `eval_gpqa.py`.
