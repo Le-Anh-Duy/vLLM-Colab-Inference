@@ -1,0 +1,473 @@
+Bài toán mô phỏng trực tiếp thách thức mà các đội ngũ hạ tầng AI doanh nghiệp đang đối mặt: phục vụ mô hình ngôn ngữ lớn sao cho đáp ứng đồng thời thông lượng cao, độ trễ thấp, độ chính xác ổn định và hiệu quả trên tài nguyên GPU hữu hạn. Thí sinh sẽ deploy và tối ưu serving stack cho mô hình LLM (do Ban tổ chức chỉ định) trên hạ tầng NVIDIA H200, với workload được mô phỏng theo production trace của một hệ thống LLM serving quy mô thực tế. Bài toán cho phép tự do lựa chọn phương pháp tối ưu — từ quantization, KV cache management, prefix caching, đến custom CUDA kernel và scheduling — để tối đa hoá tỷ lệ request được đáp ứng đúng yêu cầu trong khi vẫn đảm bảo được chất lượng đầu ra.
+
+1. Giới thiệu
+Sự bùng nổ của các mô hình ngôn ngữ lớn (Large Language Models — LLM) trong những năm gần đây đang tạo ra áp lực rất lớn lên hạ tầng tính toán của các tổ chức và doanh nghiệp. Một hệ thống inference trong môi trường sản xuất thực tế không chỉ cần đạt thông lượng (throughput) cao, mà còn phải đảm bảo đồng thời ba yêu cầu cốt lõi:
+
+Độ trễ thấp (Latency)
+
+Độ chính xác ổn định (Accuracy)
+
+Khả năng vận hành hiệu quả trên tài nguyên GPU hữu hạn.
+
+Cuộc thi LLM Inference Optimization Challenge mô phỏng trực tiếp bài toán thực tiễn mà các đội ngũ hạ tầng AI đang đối mặt: "Làm thế nào để phục vụ một mô hình ngôn ngữ lớn (LLM) với mức hiệu năng cao nhất, trong khi vẫn đảm bảo độ chính xác của câu trả lời?"
+
+Đến với cuộc thi này, thí sinh sẽ tiến hành deploy và tối ưu serving stack cho một mô hình LLM (do Ban tổ chức chỉ định) trên hạ tầng NVIDIA H200. Workload đánh giá được trích xuất và mô phỏng bám sát theo production trace của một hệ thống LLM serving quy mô thực tế. Bài toán cho phép toàn quyền tự do lựa chọn các phương pháp tối ưu — từ quantization, KV cache management, prefix caching, đến custom CUDA kernel và scheduling — để tối đa hoá điểm hiệu năng phục vụ (Effective Request Score) trong khi vẫn vượt qua được các bài kiểm tra chất lượng đầu ra.
+
+2. Mục tiêu bài toán
+Đây là bài toán tối ưu hóa phục vụ LLM (LLM serving optimization) có ràng buộc về chất lượng. Mục tiêu chung của cuộc thi là: Tối đa hóa Effective Request Score (ERS) trên toàn bộ workload trace cố định do Ban tổ chức (BTC) phát hành, đồng thời vượt qua bài kiểm tra chất lượng (pass accuracy gate). Khả năng đáp ứng của hệ thống được đánh giá qua từng request dựa trên cơ chế chấm điểm độ trễ liên tục. Điểm của mỗi request phụ thuộc vào việc hệ thống tối ưu tốt đến đâu trên hai thông số:
+
+Latency Bounds: Điểm số được nội suy liên tục dựa trên cận dưới (Floor - lý tưởng) và cận trên (Ceiling - không thể chấp nhận) của độ trễ. Ngưỡng cụ thể của từng vòng sẽ được công bố trong tài liệu tương ứng.
+
+Accuracy Gate: Hệ thống phải đảm bảo độ chính xác của mô hình thể hiện thông qua bài test GPQA Diamond. Cụ thể, điểm số của bài test này không được suy giảm quá một ngưỡng quy định theo từng vòng. Ngưỡng quy định được ban tổ chức xác định trước từng vòng thông qua việc chạy bài với baseline cho trước.
+
+Lưu ý: Tất cả các đội sẽ chạy cùng một file trace với cùng arrival timestamp. Các khái niệm chính:
+
+TTFT (Time-To-First-Token): Thời gian từ khi gửi request đến khi nhận token đầu tiên.
+TPOT (Time-Per-Output-Token): Thời gian giữa 2 token liên tiếp trong stream output.
+3. Workload Trace & Cách tính điểm
+3.1 Nguồn dữ liệu
+BTC sử dụng bộ dữ liệu mô phỏng luồng request thực tế trong môi trường LLM serving quy mô lớn được chọn lọc để đại diện cho các pattern traffic phổ biến.
+
+3.2 ERS (Effective Request Score)
+ERS là chỉ số đánh giá hiệu năng xử lý request thông qua cơ chế chấm điểm liên tục (continuous scoring), tối ưu đồng thời TTFT (Time-To-First-Token) và TPOT (Time-Per-Output-Token). Điểm ERS của hệ thống là trung bình cộng điểm của tất cả 
+N
+N requests trong file trace:
+
+ERS
+=
+1
+N
+∑
+i
+=
+1
+N
+S
+request
+,
+ 
+i
+∈
+[
+0
+,
+1
+)
+ERS= 
+N
+1
+​
+ ∑ 
+i=1
+N
+​
+ S 
+request,i
+​
+ ∈[0,1)
+
+Điểm của từng request (
+S
+request
+S 
+request
+​
+ ) được tính như sau:
+
+S
+request
+=
+{
+0
+n
+e
+ˆ
+ˊ
+u l
+o
+ˆ
+˜
+i, timeout, hoặc trả v
+e
+ˆ
+ˋ
+ 0 token
+w
+⋅
+s
+ttft
++
+(
+1
+−
+w
+)
+⋅
+s
+tpot
+n
+e
+ˆ
+ˊ
+u xử l
+y
+ˊ
+ th
+a
+ˋ
+nh c
+o
+ˆ
+ng
+S 
+request
+​
+ ={ 
+0
+w⋅s 
+ttft
+​
+ +(1−w)⋅s 
+tpot
+​
+ 
+​
+  
+n 
+e
+ˆ
+ 
+ˊ
+ u l 
+o
+ˆ
+ 
+˜
+ i, timeout, hoặc trả v 
+e
+ˆ
+ 
+ˋ
+  0 token
+n 
+e
+ˆ
+ 
+ˊ
+ u xử l 
+y
+ˊ
+​
+  th 
+a
+ˋ
+ nh c 
+o
+ˆ
+ ng
+​
+  Trong đó, điểm thành phần độ trễ 
+s
+ttft
+s 
+ttft
+​
+  và 
+s
+tpot
+s 
+tpot
+​
+  được nội suy giữa ngưỡng lý tưởng (Floor - 
+F
+F) và ngưỡng giới hạn (Ceiling - 
+C
+C):
+
+s
+ttft
+=
+[
+clamp
+(
+C
+ttft
+−
+TTFT
+C
+ttft
+−
+F
+ttft
+,
+ 
+0
+,
+ 
+1
+)
+]
+γ
+s 
+ttft
+​
+ =[clamp( 
+C 
+ttft
+​
+ −F 
+ttft
+​
+ 
+C 
+ttft
+​
+ −TTFT
+​
+ , 0, 1)] 
+γ
+ 
+
+s
+tpot
+=
+[
+clamp
+(
+C
+tpot
+−
+TPOT
+C
+tpot
+−
+F
+tpot
+,
+ 
+0
+,
+ 
+1
+)
+]
+γ
+s 
+tpot
+​
+ =[clamp( 
+C 
+tpot
+​
+ −F 
+tpot
+​
+ 
+C 
+tpot
+​
+ −TPOT
+​
+ , 0, 1)] 
+γ
+  Giải thích các tham số cấu hình:
+
+F
+ttft
+F 
+ttft
+​
+ , 
+F
+tpot
+F 
+tpot
+​
+ : Cận dưới (Floor) của TTFT và TPOT — độ trễ đạt mức này hoặc thấp hơn sẽ nhận điểm tối đa (
+s
+=
+1
+s=1).
+C
+ttft
+C 
+ttft
+​
+ , 
+C
+tpot
+C 
+tpot
+​
+ : Cận trên (Ceiling) của TTFT và TPOT — độ trễ chạm mức này hoặc cao hơn sẽ bị tính 
+0
+0 điểm (
+s
+=
+0
+s=0).
+w
+w: Trọng số ưu tiên của TTFT (
+0
+<
+w
+<
+1
+0<w<1).
+γ
+γ: Hệ số lũy thừa (
+γ
+≥
+1
+γ≥1) quy định độ dốc của hàm phạt (penalty curve).
+Hàm 
+clamp
+(
+x
+,
+0
+,
+1
+)
+clamp(x,0,1): Giới hạn giá trị của 
+x
+x luôn nằm trong đoạn 
+[
+0
+,
+1
+]
+[0,1].
+3.3 Accuracy Gate — GPQA Diamond
+Accuracy được đánh giá độc lập bằng bộ 100 câu hỏi cố định trích xuất từ GPQA Diamond. Hàm suy giảm độ chính xác 
+Δ
+Δ (accuracy drop) được tính như sau:
+
+Δ
+=
+baseline_accuracy
+−
+GPQA_accuracy_của_đội
+Δ=baseline_accuracy−GPQA_accuracy_của_đội (Trong đó, baseline_accuracy là điểm reference accuracy của mô hình gốc chạy bằng trọng số BF16). Dựa trên độ sụt giảm 
+Δ
+Δ, hệ thống áp dụng hàm phạt 
+f
+(
+Δ
+)
+f(Δ) (Accuracy decay function) — một hàm bậc nhất từng đoạn (piecewise linear) với giá trị đầu ra thuộc đoạn 
+[
+0
+,
+1
+]
+[0,1], quy định mức độ trừ điểm vào tổng điểm cuối cùng:
+
+f
+(
+Δ
+)
+=
+{
+1.0
+khi 
+Δ
+≤
+10
+1.0
+−
+Δ
+−
+10
+6
+khi 
+10
+<
+Δ
+<
+16
+0.0
+khi 
+Δ
+≥
+16
+f(Δ)= 
+⎩
+⎨
+⎧
+​
+  
+1.0
+1.0− 
+6
+Δ−10
+​
+ 
+0.0
+​
+  
+khi Δ≤10
+khi 10<Δ<16
+khi Δ≥16
+​
+ 
+
+3.4. Công thức tính điểm tổng
+Điểm số cuối cùng của mỗi đội được tính bằng cách kết hợp điểm hiệu năng phục vụ (ERS) với hình phạt sụt giảm chất lượng (Accuracy drop):
+
+S
+c
+o
+r
+e
+=
+100
+×
+ERS
+×
+f
+(
+Δ
+)
+Score=100×ERS×f(Δ) Trong đó:
+
+ERS (Effective Request Score): Điểm số trung bình đánh giá hiệu năng xử lý request trên toàn bộ trace (đã mô tả ở phần ERS).
+f
+(
+Δ
+)
+f(Δ): Hệ số phạt dựa trên mức sụt giảm độ chính xác.
+4. Mô hình sử dụng
+Tất cả các vòng thi sẽ sử dụng chung một mô hình ngôn ngữ lớn do BTC chỉ định với các đặc tính sau:
+
+Kiến trúc: Dense Transformer.
+Precision gốc: BF16 (native release) — hỗ trợ các phương pháp quantization như FP8/AWQ/GPTQ.
+License: Apache 2.0.
+Nguồn weights: Tải từ HuggingFace Hub (Hash cố định sẽ được công bố chi tiết trong tài liệu từng vòng).
+5. Phương pháp tối ưu được phép
+Thí sinh được toàn quyền tự do lựa chọn và kết hợp các phương pháp tối ưu, miễn không vi phạm quy định của cuộc thi. Các hướng tiếp cận được khuyến khích bao gồm:
+
+KV Cache Optimization: KV cache quantization (FP8, INT8), KV cache offloading (CPU/NVMe), prefix caching, semantic caching, Paged Attention, memory-aware scheduling.
+Serving & Scheduling Optimization: Dynamic/continuous batching, speculative decoding (sử dụng draft model hoặc self-speculative), disaggregated prefill/decode serving.
+System-Level Optimization: Custom CUDA / Triton kernels, fused attention kernels (FlashAttention, FlashInfer...), NCCL communication optimization cho NVLink topology, CUDA Graphs, memory layout optimization.
+Runtime & Compiler Optimization: Sử dụng các framework như vLLM, SGLang, TensorRT-LLM, Transformers, hoặc custom runtime; tùy chỉnh tensor parallelism và pipeline parallelism; overlap communication/computation.
+6. Môi trường đánh giá chuẩn hóa
+Hạ tầng phần cứng: NVIDIA H200 GPU
+Hệ điều hành: Ubuntu 22.04 LTS
+CUDA Version: CUDA 12.x
+GPU Driver: Phiên bản tiêu chuẩn do BTC cung cấp.
+7. Rule & Anti-Cheating
+Nghiêm cấm tuyệt đối các hành vi sau:
+
+❌ Hardcode đáp án của probe subset trong mã nguồn.
+❌ Pre-compute response (tính toán trước câu trả lời) cho các request nằm trong trace.
+❌ Gọi network external từ inference server trong quá trình serving (Không call API ngoài, không pull model dynamically).
+❌ Chỉnh sửa (sửa đổi) tokenizer của mô hình.
+❌ Thay đổi arrival timestamp của trace hoặc cấu hình concurrency.
+❌ Sử dụng account khác/account phụ để leak hidden trace giữa các đội.
+Hình thức xử lý:
+
+Vi phạm → submission bị void
+Vi phạm nghiêm trọng → đội bị loại
+Khiếu nại: gửi tới Ban tổ chức trong vòng 24h sau khi công bố kết quả của phase tương ứng.
+
