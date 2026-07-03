@@ -7,7 +7,7 @@ set -euo pipefail
 MODEL_NAME="${MODEL_NAME:-Qwen/Qwen2.5-1.5B-Instruct}"
 PORT="${PORT:-8000}"
 HOST="${HOST:-0.0.0.0}"
-GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.3}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
 VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 
 echo "========================================"
