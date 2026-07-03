@@ -7,7 +7,7 @@ set -euo pipefail
 MODEL_NAME="${MODEL_NAME:-facebook/opt-125m}"
 PORT="${PORT:-8000}"
 HOST="${HOST:-0.0.0.0}"
-GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.9}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.3}"
 VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 
 echo "========================================"
