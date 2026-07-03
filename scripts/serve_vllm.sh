@@ -4,7 +4,7 @@
 # them tham so vllm o cuoi lenh goi script (se duoc noi vao VLLM_EXTRA_ARGS).
 set -euo pipefail
 
-MODEL_NAME="${MODEL_NAME:-facebook/opt-125m}"
+MODEL_NAME="${MODEL_NAME:-Qwen/Qwen2.5-1.5B-Instruct}"
 PORT="${PORT:-8000}"
 HOST="${HOST:-0.0.0.0}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.3}"
