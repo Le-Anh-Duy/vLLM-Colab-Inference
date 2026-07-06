@@ -91,6 +91,14 @@ python3 scripts/serve_from_compose.py --model-override Qwen/Qwen3.5-2B
 
 Đổi flag ở `docker/docker-compose.yml` là **nơi duy nhất** cần sửa — script này tự đọc lại, không cần sửa gì thêm.
 
+**Khi GPU Colab không hỗ trợ một flag về mặt phần cứng** (vd `--kv-cache-dtype=fp8` cần GPU SM89+/Hopper trở lên — H200 thật hỗ trợ, nhưng GPU Colab session hiện tại có thể chỉ là T4/SM75 hoặc A100/SM80, sẽ lỗi `FP8 KV cache is not supported ... requires SM89+`), dùng `--override` để ghi đè **chỉ cho lần chạy này trên Colab**, không đụng vào `docker-compose.yml`:
+
+```bash
+python3 scripts/serve_from_compose.py --model-override Qwen/Qwen3.5-2B --override kv-cache-dtype=auto
+```
+
+Notebook (cell 3) đã tự động phát hiện compute capability của GPU Colab và tự thêm override này nếu cần — không phải làm tay mỗi lần đổi loại GPU.
+
 ### `scripts/serve_vllm.sh` (test nhanh, thủ công)
 
 Dùng khi muốn thử nhanh 1 flag riêng lẻ trước khi quyết định đưa vào `docker-compose.yml` (vd thử `KV_CACHE_DTYPE=fp8` xem có boot được không trước khi cam kết). **Không phải nguồn sự thật** — sau khi quyết định giữ flag nào, phải tự tay thêm vào `docker/docker-compose.yml` rồi dùng `serve_from_compose.py` để verify lại.
