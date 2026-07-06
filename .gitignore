@@ -4,3 +4,5 @@ __pycache__/
 *.log
 .env
 cuda-keyring*.deb
+__MACOSX/
+.DS_Store

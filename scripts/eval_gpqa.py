@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cham accuracy GPQA Diamond cho server vLLM dang chay, phuc vu Accuracy
-Gate trong Statement.txt (track 3, Viettel AI Race 2026, muc 3.3).
+Gate trong Statement.txt (Viettel AI Race 2026, vong 1 so loai, muc 2).
 
 BTC dung 100 cau hoi CO DINH trich tu GPQA Diamond (chua cong bo o thoi diem
 viet script nay). Script nay nhan file cau hoi qua --questions-file (JSONL) -
@@ -221,7 +221,7 @@ async def run_eval(
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--base-url", default="http://localhost:8000")
-    p.add_argument("--model", default="Qwen/Qwen2.5-1.5B-Instruct")
+    p.add_argument("--model", default="Qwen/Qwen3.5-2B")
     p.add_argument("--questions-file", default=None, help="File JSONL cau hoi (uu tien dung cai nay khi BTC phat hanh)")
     p.add_argument("--hf-fallback", action="store_true", help="Tai GPQA Diamond public tu HuggingFace de tu test (can 'datasets' + quyen truy cap)")
     p.add_argument("--num-questions", type=int, default=100, help="Chi dung voi --hf-fallback")
@@ -229,7 +229,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-tokens", type=int, default=1024, help="Du cho CoT reasoning truoc khi ra 'Answer: X'")
     p.add_argument("--timeout", type=float, default=120.0)
     p.add_argument("--max-concurrency", type=int, default=8)
-    p.add_argument("--baseline-accuracy", type=float, default=None, help="baseline_accuracy (%%) do BTC cong bo, de tinh f(delta)")
+    p.add_argument("--baseline-accuracy", type=float, default=0.4, help="baseline_accuracy theo thang 0..1 (Statement.txt vong 1: mac dinh 0.4), dung de tinh f(delta)")
     p.add_argument("--output-dir", default="gpqa_results")
     return p.parse_args()
 
@@ -260,32 +260,34 @@ def main() -> None:
 
     num_correct = sum(1 for r in results if r["correct"])
     num_unparsed = sum(1 for r in results if r["predicted_letter"] is None)
-    accuracy_pct = 100.0 * num_correct / len(results) if results else 0.0
+    # accuracy theo thang 0..1, dung truc tiep voi accuracy_decay() va
+    # baseline_accuracy (Statement.txt dung thang nay, vd baseline=0.4=40%).
+    accuracy = num_correct / len(results) if results else 0.0
 
     print("========================================")
     print(f"So cau hoi         : {len(results)}")
     print(f"So cau dung        : {num_correct}")
     print(f"So cau khong parse duoc dap an : {num_unparsed}")
-    print(f"Accuracy           : {accuracy_pct:.2f}%")
+    print(f"Accuracy           : {accuracy:.4f} ({accuracy * 100:.2f}%)")
 
     summary: dict[str, Any] = {
         "num_questions": len(results),
         "num_correct": num_correct,
         "num_unparsed": num_unparsed,
-        "accuracy_pct": accuracy_pct,
+        "accuracy": accuracy,
     }
 
     if args.baseline_accuracy is not None:
-        delta = args.baseline_accuracy - accuracy_pct
+        delta = args.baseline_accuracy - accuracy
         penalty = accuracy_decay(delta)
         summary["baseline_accuracy"] = args.baseline_accuracy
         summary["delta"] = delta
         summary["accuracy_penalty_f_delta"] = penalty
-        print(f"Baseline accuracy  : {args.baseline_accuracy:.2f}%")
-        print(f"Delta              : {delta:.2f}")
+        print(f"Baseline accuracy  : {args.baseline_accuracy:.4f} ({args.baseline_accuracy * 100:.2f}%)")
+        print(f"Delta              : {delta:.4f}")
         print(f"f(delta) (penalty) : {penalty:.4f}")
     else:
-        print("(Truyen --baseline-accuracy de tinh f(delta) theo Statement.txt muc 3.3)")
+        print("(Truyen --baseline-accuracy de tinh f(delta) theo Statement.txt muc 2)")
     print("========================================")
 
     out_dir = Path(args.output_dir)

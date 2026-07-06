@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """Mo phong traffic goi vLLM OpenAI-compatible server va cham diem theo cong
-thuc ERS (Effective Request Score) trong Statement.txt (track 3, Viettel AI
-Race 2026).
+thuc ERS (Effective Request Score) trong Statement.txt (Viettel AI Race 2026,
+vong 1 so loai).
 
-Chay tren Colab (can `pip install httpx` neu chua co):
+Chay voi trace that cua BTC (vd baseline-and-input/trace-round1.jsonl):
+    python3 scripts/benchmark_traffic.py --trace-file trace-round1.jsonl
+
+Hoac sinh trace Poisson gia lap de test nhanh khi chua co file trace:
     python3 scripts/benchmark_traffic.py --synthetic --rps 2 --duration 30
 
-Hoac voi trace file JSONL co san (moi dong 1 request):
-    {"id": "0", "arrival_time": 0.0, "prompt": "...", "max_tokens": 128}
-    python3 scripts/benchmark_traffic.py --trace-file trace.jsonl
+--trace-file tu nhan dien 2 dinh dang:
+  1. Dinh dang BTC that (co key "body"):
+     {"request_id": 0, "timestamp_ms": 0, "body": {"model": "...",
+      "messages": [...], "max_tokens": 200, "temperature": 0, "seed": 42}}
+  2. Dinh dang generic tu viet (khong co "body"):
+     {"id": "0", "arrival_time": 0.0, "prompt": "...", "max_tokens": 128}
 
-Cac nguong Floor/Ceiling/w/gamma la PLACEHOLDER - BTC se cong bo gia tri
-chinh thuc theo tung vong, luc do chi can doi qua CLI flag, khong sua code.
+Nguong Floor/Ceiling/w/gamma mac dinh la GIA TRI THAT cua vong 1 so loai
+(Statement.txt muc 2). Cac vong sau co the doi so - luc do chi can doi qua
+CLI flag, khong sua code.
 """
 from __future__ import annotations
 
@@ -56,8 +63,34 @@ SAMPLE_PROMPTS = [
 class TraceRequest:
     id: str
     arrival_time: float  # giay, tinh tu t0
-    prompt: str
+    messages: list[dict]
     max_tokens: int = 128
+    temperature: float = 0.0
+    seed: int | None = None
+
+
+def _row_to_request(row: dict[str, Any], idx: int) -> TraceRequest:
+    if "body" in row:
+        # Dinh dang that cua BTC: {request_id, timestamp_ms, workload_type, body}
+        body = row["body"]
+        return TraceRequest(
+            id=str(row.get("request_id", idx)),
+            arrival_time=float(row["timestamp_ms"]) / 1000.0,
+            messages=body["messages"],
+            max_tokens=int(body.get("max_tokens", 128)),
+            temperature=float(body.get("temperature", 0.0)),
+            seed=body.get("seed"),
+        )
+    # Dinh dang generic (tu viet de test nhanh)
+    prompt = row.get("prompt") or random.choice(SAMPLE_PROMPTS)
+    return TraceRequest(
+        id=str(row.get("id", idx)),
+        arrival_time=float(row["arrival_time"]),
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=int(row.get("max_tokens", 128)),
+        temperature=float(row.get("temperature", 0.0)),
+        seed=row.get("seed"),
+    )
 
 
 def load_trace_file(path: str) -> list[TraceRequest]:
@@ -67,15 +100,7 @@ def load_trace_file(path: str) -> list[TraceRequest]:
             line = line.strip()
             if not line:
                 continue
-            row = json.loads(line)
-            requests.append(
-                TraceRequest(
-                    id=str(row.get("id", i)),
-                    arrival_time=float(row["arrival_time"]),
-                    prompt=row.get("prompt") or random.choice(SAMPLE_PROMPTS),
-                    max_tokens=int(row.get("max_tokens", 128)),
-                )
-            )
+            requests.append(_row_to_request(json.loads(line), i))
     requests.sort(key=lambda r: r.arrival_time)
     return requests
 
@@ -96,7 +121,7 @@ def generate_synthetic_trace(
             TraceRequest(
                 id=str(i),
                 arrival_time=t,
-                prompt=rng.choice(SAMPLE_PROMPTS),
+                messages=[{"role": "user", "content": rng.choice(SAMPLE_PROMPTS)}],
                 max_tokens=rng.randint(*max_tokens_range),
             )
         )
@@ -129,11 +154,13 @@ async def run_one_request(
 ) -> RequestResult:
     payload = {
         "model": model,
-        "messages": [{"role": "user", "content": req.prompt}],
+        "messages": req.messages,
         "max_tokens": req.max_tokens,
         "stream": True,
-        "temperature": 0.0,
+        "temperature": req.temperature,
     }
+    if req.seed is not None:
+        payload["seed"] = req.seed
     result = RequestResult(id=req.id)
     send_time = time.perf_counter()
     first_token_time: float | None = None
@@ -306,7 +333,7 @@ def summarize(
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--base-url", default="http://localhost:8000", help="Goc URL cua vLLM server")
-    p.add_argument("--model", default="Qwen/Qwen2.5-1.5B-Instruct", help="Ten model (phai khop --model luc serve)")
+    p.add_argument("--model", default="Qwen/Qwen3.5-2B", help="Ten model (phai khop --served-model-name luc serve)")
     p.add_argument("--trace-file", default=None, help="Duong dan file JSONL trace co san")
     p.add_argument("--synthetic", action="store_true", help="Sinh trace Poisson gia lap thay vi doc file")
     p.add_argument("--rps", type=float, default=2.0, help="Request/giay cho trace gia lap")
@@ -316,13 +343,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--timeout", type=float, default=60.0, help="Timeout moi request (giay)")
     p.add_argument("--max-concurrency", type=int, default=64, help="Gioi han so request dong thoi")
-    # Nguong ERS - PLACEHOLDER, doi khi BTC cong bo gia tri chinh thuc tung vong
-    p.add_argument("--floor-ttft", type=float, default=0.3, help="Floor TTFT (giay)")
-    p.add_argument("--ceil-ttft", type=float, default=3.0, help="Ceiling TTFT (giay)")
-    p.add_argument("--floor-tpot", type=float, default=0.05, help="Floor TPOT (giay/token)")
-    p.add_argument("--ceil-tpot", type=float, default=0.2, help="Ceiling TPOT (giay/token)")
+    # Nguong ERS - gia tri THAT cua vong 1 so loai (Statement.txt muc 2).
+    # Cac vong sau co the doi, luc do chi can truyen lai qua CLI flag.
+    p.add_argument("--floor-ttft", type=float, default=0.1, help="Floor TTFT (giay) - mac dinh 100ms")
+    p.add_argument("--ceil-ttft", type=float, default=1.5, help="Ceiling TTFT (giay) - mac dinh 1500ms")
+    p.add_argument("--floor-tpot", type=float, default=0.02, help="Floor TPOT (giay/token) - mac dinh 20ms")
+    p.add_argument("--ceil-tpot", type=float, default=0.045, help="Ceiling TPOT (giay/token) - mac dinh 45ms")
     p.add_argument("--w", type=float, default=0.5, help="Trong so TTFT (0<w<1)")
-    p.add_argument("--gamma", type=float, default=1.0, help="He so luy thua penalty curve (>=1)")
+    p.add_argument("--gamma", type=float, default=2.0, help="He so luy thua penalty curve (>=1)")
     p.add_argument("--output-dir", default="benchmark_results", help="Thu muc ghi ket qua")
     return p.parse_args()
 
@@ -370,8 +398,7 @@ def main() -> None:
     print(f"Thanh cong / That bai : {summary['num_success']} / {summary['num_failed']}")
     print(f"TTFT (mean/p50/p95)  : {summary['ttft_sec']['mean']:.3f}s / {summary['ttft_sec']['p50']:.3f}s / {summary['ttft_sec']['p95']:.3f}s")
     print(f"TPOT (mean/p50/p95)  : {summary['tpot_sec']['mean']:.3f}s / {summary['tpot_sec']['p50']:.3f}s / {summary['tpot_sec']['p95']:.3f}s")
-    print(f"ERS (uoc luong)      : {summary['ers']:.4f}")
-    print("(Nguong Floor/Ceiling/w/gamma la PLACEHOLDER, doi qua CLI flag khi BTC cong bo gia tri chinh thuc)")
+    print(f"ERS                  : {summary['ers']:.4f}")
     print("========================================")
 
     out_dir = Path(args.output_dir)

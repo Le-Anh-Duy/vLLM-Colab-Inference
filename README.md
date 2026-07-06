@@ -6,9 +6,11 @@ Workflow: code/script được viết và version-control ở đây (local), sau
 
 ## Bối cảnh
 
-- Môi trường chấm điểm chính thức của BTC: NVIDIA H200, Ubuntu 22.04 LTS, CUDA 12.x, driver do BTC cung cấp sẵn.
-- Colab (T4/L4/A100 tuỳ phiên) chỉ dùng để dev/thử nghiệm nhanh — cấu hình mặc định trong repo (CUDA 13.0 runtime, torch 2.11.0, vllm 0.24.0) là cấu hình đã chạy được trên Colab, **không nhất thiết trùng** với môi trường H200 thật.
-- Model chính thức của cuộc thi sẽ do BTC chỉ định theo từng vòng (Dense Transformer, BF16, Apache 2.0, tải từ HuggingFace). Model mặc định để dev/benchmark hiện tại là [`Qwen/Qwen2.5-1.5B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) (1.5B tham số, BF16, Apache 2.0) — đủ lớn để phản ánh tương đối chân thực latency/TPOT của một dense transformer thật, nhưng vẫn nhỏ gọn (~3GB weights) để chạy nhanh và không tràn VRAM trên GPU Colab (T4 15GB trở lên).
+- **Vòng 1 sơ loại** (02/07 - 30/07/2026): serve `Qwen/Qwen3.5-2B` xử lý file trace 120 request (`baseline-and-input/trace-round1.jsonl`), tối đa hoá **ERS** trong khi vẫn qua **Accuracy Gate** (GPQA Diamond). Xem đầy đủ ở [`Statement.txt`](Statement.txt).
+- **Hạ tầng chấm điểm thật:** mỗi lượt chấm chỉ được cấp **1 lát MiG H200: 18GB VRAM, 3 CPU, 8GB RAM** — không phải full H200. Nộp bài bằng cách push Docker image public lên Docker Hub + nộp `docker-compose.yml` cho BTC pull về chạy tự động (xem mục "Nộp bài bằng Docker" bên dưới). File compose mẫu của BTC: `baseline-and-input/docker-compose-baseline.yml`.
+- **Ngưỡng điểm vòng 1 (đã là số thật, không còn placeholder):** `F_ttft=100ms, C_ttft=1500ms, F_tpot=20ms, C_tpot=45ms, γ=2, w=0.5`; Accuracy Gate: `baseline_accuracy=0.4` (thang 0..1), phạt bắt đầu từ `Δ>0.10`, về 0 điểm accuracy ở `Δ≥0.16`.
+- **Hệ quả quan trọng:** `--max-model-len=262144` (262K context) trên chỉ 18GB VRAM là rất căng — KV cache quantization (FP8/INT8) gần như bắt buộc chứ không còn là tối ưu tuỳ chọn, nếu không sẽ không đủ chỗ cho KV cache ở context dài với bất kỳ concurrency nào.
+- Colab (T4/L4/A100 tuỳ phiên) chỉ dùng để dev/thử nghiệm nhanh — VRAM thường **nhiều hơn** 18GB của MiG slice thật, nên test "chạy được trên Colab" không đảm bảo chạy được trên máy chấm; khi cần mô phỏng sát VRAM 18GB, giảm `MAX_MODEL_LEN` hoặc bật `KV_CACHE_DTYPE=fp8`.
 - vLLM có publish wheel cho một vài bản CUDA cụ thể qua GitHub Releases (vd `+cu129`), nhưng **mỗi version chỉ có một số biến thể nhất định** — không phải version nào cũng có `+cu128`/`+cu130`. Luôn kiểm tra asset thật tại `https://github.com/vllm-project/vllm/releases/tag/v<VLLM_VERSION>` trước khi đổi `CUDA_VERSION` cho kịch bản B/C.
 
 ### 3 kịch bản chạy `scripts/setup_vllm.sh`
@@ -30,10 +32,13 @@ scripts/
   setup_vllm.sh         # cài CUDA runtime + torch + vllm
   serve_vllm.sh         # khởi động vLLM OpenAI-compatible API server
   scoring.py            # công thức chấm điểm dùng chung (ERS clamp, accuracy decay f(Δ))
-  benchmark_traffic.py  # mô phỏng traffic + đo TTFT/TPOT/ERS
+  benchmark_traffic.py  # đo TTFT/TPOT/ERS trên trace thật hoặc trace giả lập
   eval_gpqa.py          # chấm accuracy GPQA Diamond (Accuracy Gate)
 notebooks/
   vllm_colab.ipynb  # clone repo, chạy setup + serve, test + benchmark
+baseline-and-input/
+  trace-round1.jsonl            # trace 120 request thật của BTC (vòng 1)
+  docker-compose-baseline.yml   # compose mẫu của BTC (tham khảo, không sửa)
 ```
 
 ## Sử dụng trên Colab
@@ -72,48 +77,53 @@ Tất cả tham số đều có giá trị mặc định, override bằng cách 
 
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
-| `MODEL_NAME` | `Qwen/Qwen2.5-1.5B-Instruct` | Model để serve (HuggingFace repo id) |
+| `MODEL_NAME` | `Qwen/Qwen3.5-2B` | Model để load (HuggingFace repo id, dùng cho `--model`) |
+| `SERVED_MODEL_NAME` | `Qwen3.5-2B` | Tên model client gọi qua API (`--served-model-name`) — phải khớp field `"model"` trong request/trace, KHÔNG phải HF repo id |
+| `MAX_MODEL_LEN` | `262144` | Context length tối đa (khớp baseline compose). Rất tốn KV cache trên GPU nhỏ — giảm giá trị này khi test trên Colab nếu OOM |
 | `HOST` | `0.0.0.0` | Bind host |
 | `PORT` | `8000` | Bind port |
-| `GPU_MEMORY_UTILIZATION` | `0.85` | Tỷ lệ VRAM vllm được phép dùng (an toàn cho GPU dành riêng như Colab; xuống thấp hơn nếu chia sẻ GPU với process khác) |
-| `ENABLE_PREFIX_CACHING` | `1` | `0` để tắt (`--no-enable-prefix-caching`) — dùng khi cần A/B so sánh có/không prefix caching. vLLM bản hiện tại đã bật mặc định, cờ này chỉ để chủ động kiểm soát/so sánh. |
-| `KV_CACHE_DTYPE` | *(rỗng = `auto`)* | Set `fp8` để quantize KV cache (Statement.txt mục 5: KV Cache Optimization) — tăng concurrency/context nhưng có thể ảnh hưởng accuracy, **luôn chấm lại bằng `scripts/eval_gpqa.py` sau khi bật**. |
-| `VLLM_EXTRA_ARGS` | *(rỗng)* | Chuỗi tham số bổ sung truyền thẳng cho `vllm.entrypoints.openai.api_server` (vd `--quantization fp8 --max-model-len 4096`) |
+| `GPU_MEMORY_UTILIZATION` | `0.85` | Tỷ lệ VRAM vllm được phép dùng. Trên Colab (GPU dành riêng, thường >18GB) để 0.85 là an toàn; khi mô phỏng đúng MiG 18GB có thể cần theo sát baseline (`0.95`) |
+| `TENSOR_PARALLEL_SIZE` | `1` | Khớp baseline compose (1 GPU/MiG instance, không có multi-GPU) |
+| `ENABLE_PREFIX_CACHING` | `1` | `0` để tắt (`--no-enable-prefix-caching`) — dùng khi cần A/B so sánh có/không prefix caching. |
+| `KV_CACHE_DTYPE` | *(rỗng = `auto`)* | Set `fp8` để quantize KV cache (Statement.txt mục 3: KV Cache & Memory) — gần như bắt buộc với context 262K trên 18GB VRAM, nhưng có thể ảnh hưởng accuracy, **luôn chấm lại bằng `scripts/eval_gpqa.py` sau khi bật**. |
+| `VLLM_EXTRA_ARGS` | *(rỗng)* | Chuỗi tham số bổ sung truyền thẳng cho `vllm.entrypoints.openai.api_server` (vd `--quantization fp8`) |
 
 Script cũng nhận thêm tham số dòng lệnh trực tiếp, vd:
 
 ```bash
-bash scripts/serve_vllm.sh --max-model-len 4096
+bash scripts/serve_vllm.sh --max-model-len 8192
 ```
 
 ### `scripts/benchmark_traffic.py`
 
-Mô phỏng traffic gửi tới server đang chạy (`serve_vllm.sh`) qua `/v1/chat/completions` (streaming), đo TTFT/TPOT từng request, và tính điểm ERS xấp xỉ theo đúng công thức ở mục 3.2 `Statement.txt` (interpolate Floor/Ceiling, trọng số `w`, hệ số luỹ thừa `gamma`).
+Gửi traffic tới server đang chạy (`serve_vllm.sh`) qua `/v1/chat/completions` (streaming), đo TTFT/TPOT từng request, và tính **ERS** đúng công thức thật ở mục 2 `Statement.txt` (Floor/Ceiling/`w`/`gamma` mặc định = số thật vòng 1 sơ loại).
 
 ```bash
 pip install httpx   # 1 lần trên Colab, chưa có sẵn
 
-# Trace giả lập (Poisson arrival), 2 req/s trong 30s:
-python3 scripts/benchmark_traffic.py --synthetic --rps 2 --duration 30
+# Trace THAT cua BTC (120 request, dung file nay de uoc luong ERS sat nhat):
+python3 scripts/benchmark_traffic.py --trace-file baseline-and-input/trace-round1.jsonl
 
-# Trace có sẵn (JSONL, mỗi dòng: {"id","arrival_time","prompt","max_tokens"}):
-python3 scripts/benchmark_traffic.py --trace-file trace.jsonl
+# Trace giả lập (Poisson arrival) khi muon test nhanh khong can trace that:
+python3 scripts/benchmark_traffic.py --synthetic --rps 2 --duration 30
 ```
 
-Kết quả in ra console (TTFT/TPOT mean/p50/p95, ERS) và ghi vào `benchmark_results/summary.json` + `per_request.csv`.
+`--trace-file` tự nhận diện 2 định dạng: JSONL thật của BTC (`{"request_id", "timestamp_ms", "body": {...}}`, dùng luôn cho `trace-round1.jsonl`) hoặc JSONL generic tự viết (`{"id", "arrival_time", "prompt", "max_tokens"}`).
 
-**Quan trọng:** các ngưỡng `--floor-ttft`, `--ceil-ttft`, `--floor-tpot`, `--ceil-tpot`, `--w`, `--gamma` hiện là **placeholder** (chưa có số liệu chính thức từ BTC — xem mục 3.2 `Statement.txt`: "*Ngưỡng cụ thể của từng vòng sẽ được công bố*"). Khi BTC công bố, chỉ cần truyền lại qua CLI flag, không cần sửa code. ERS in ra chỉ mang tính tương đối để so sánh giữa các lần tối ưu, không phải điểm thi thật.
+Kết quả in ra console (TTFT/TPOT mean/p50/p95, ERS) và ghi vào `benchmark_results/summary.json` + `per_request.csv`. Nhớ `--model` phải khớp `SERVED_MODEL_NAME` (`Qwen3.5-2B`), không phải HF repo id.
+
+**Lưu ý:** ngưỡng Floor/Ceiling/`w`/`gamma` là số thật của **vòng 1 sơ loại** — các vòng sau BTC có thể công bố số khác, lúc đó chỉ cần truyền lại qua CLI flag (`--floor-ttft`, `--ceil-ttft`, ...), không cần sửa code.
 
 ### `scripts/eval_gpqa.py`
 
-Chấm accuracy trên GPQA Diamond cho server đang chạy, phục vụ **Accuracy Gate** (mục 3.3 `Statement.txt`) — bắt buộc phải chạy lại script này sau MỖI lần đổi quantization/tối ưu có khả năng ảnh hưởng chất lượng đầu ra (KV cache FP8, weight quantization, speculative decoding...), để biết `Δ` (accuracy drop so với baseline) có vượt ngưỡng bị phạt hay không.
+Chấm accuracy trên GPQA Diamond cho server đang chạy, phục vụ **Accuracy Gate** (mục 2 `Statement.txt`) — bắt buộc phải chạy lại script này sau MỖI lần đổi quantization/tối ưu có khả năng ảnh hưởng chất lượng đầu ra (KV cache FP8, weight quantization, speculative decoding...), để biết `Δ` (accuracy drop so với baseline) có vượt ngưỡng bị phạt hay không.
 
 ```bash
 pip install httpx
 
 # BTC chua cong bo 100 cau hoi co dinh - dung file JSONL cua rieng ban truoc:
 # {"id": "0", "question": "...", "choices": ["A..","B..","C..","D.."], "answer_index": 2}
-python3 scripts/eval_gpqa.py --questions-file gpqa_diamond.jsonl --baseline-accuracy 70.0
+python3 scripts/eval_gpqa.py --questions-file gpqa_diamond.jsonl
 
 # Hoac tu test bang bo GPQA Diamond public tren HuggingFace (dataset gated,
 # can `pip install datasets` + chap nhan dieu khoan/HF_TOKEN - KHONG phai bo
@@ -121,6 +131,17 @@ python3 scripts/eval_gpqa.py --questions-file gpqa_diamond.jsonl --baseline-accu
 python3 scripts/eval_gpqa.py --hf-fallback --num-questions 100
 ```
 
-Kết quả in accuracy (%) ra console, và nếu truyền `--baseline-accuracy` sẽ tính luôn `Δ` và hệ số phạt `f(Δ)` theo đúng công thức piecewise trong `Statement.txt`. Ghi chi tiết vào `gpqa_results/summary.json` + `per_question.csv` (kèm câu trả lời thô của model để soát lại khi cần).
+**Lưu ý đơn vị:** accuracy và `--baseline-accuracy` dùng thang **0..1** (khớp Statement.txt: `baseline_accuracy` mặc định `0.4` = 40%), không phải phần trăm 0..100. Mặc định `--baseline-accuracy` đã là `0.4`. Kết quả in accuracy + `Δ` + hệ số phạt `f(Δ)` ra console, ghi chi tiết vào `gpqa_results/summary.json` + `per_question.csv` (kèm câu trả lời thô của model để soát lại khi cần).
 
 **Khi BTC công bố file 100 câu hỏi chính thức:** chỉ cần trỏ `--questions-file` vào file đó, không sửa code. `scripts/scoring.py` chứa chung công thức `f(Δ)` và `clamp01` dùng bởi cả `benchmark_traffic.py` và `eval_gpqa.py`.
+
+## Nộp bài bằng Docker (chưa triển khai — kế hoạch)
+
+Quy trình nộp bài của BTC: đóng gói giải pháp thành Docker image → push lên Docker Hub public → nộp `docker-compose.yml` trỏ vào image đó qua Portal → BTC tự pull về chạy trên MiG H200 và benchmark.
+
+Vì không muốn cài Docker cục bộ, hướng dự kiến:
+- **Build & push image:** dùng GitHub Actions (runner Ubuntu có sẵn Docker daemon) để build Dockerfile (bake sẵn weights model vào image lúc build — tránh gọi mạng ngoài lúc serving, đúng luật anti-cheat) rồi push thẳng lên Docker Hub bằng access token, không cần tải gì về máy.
+- **Test hành vi/tối ưu:** vẫn dùng Colab/Kaggle như hiện tại (không cần Docker) — miễn CLI flags + version vLLM khớp với `docker-compose.yml`, kết quả hành vi tương đương vì Docker chỉ là lớp đóng gói.
+- **Giới hạn:** GitHub Actions free runner không có GPU nên không chạy được benchmark GPU thật trong CI — CI chỉ đảm bảo image build thành công + container boot/health-check được; phần hành vi/hiệu năng đã được xác nhận riêng qua Colab.
+
+Docker Hub username: `duylemeow`. Chưa có Dockerfile/GitHub Actions workflow — sẽ bổ sung ở bước tiếp theo.
