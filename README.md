@@ -29,11 +29,12 @@ Workflow: code/script được viết và version-control ở đây (local), sau
 
 ```
 scripts/
-  setup_vllm.sh         # cài CUDA runtime + torch + vllm
-  serve_vllm.sh         # khởi động vLLM OpenAI-compatible API server
-  scoring.py            # công thức chấm điểm dùng chung (ERS clamp, accuracy decay f(Δ))
-  benchmark_traffic.py  # đo TTFT/TPOT/ERS trên trace thật hoặc trace giả lập
-  eval_gpqa.py          # chấm accuracy GPQA Diamond (Accuracy Gate)
+  setup_vllm.sh          # cài CUDA runtime + torch + vllm
+  serve_vllm.sh          # khởi động vLLM để test nhanh, tự set flag (co the lech voi compose)
+  serve_from_compose.py  # khởi động vLLM đọc THẲNG docker/docker-compose.yml (nguồn sự thật duy nhất)
+  scoring.py             # công thức chấm điểm dùng chung (ERS clamp, accuracy decay f(Δ))
+  benchmark_traffic.py   # đo TTFT/TPOT/ERS trên trace thật hoặc trace giả lập
+  eval_gpqa.py           # chấm accuracy GPQA Diamond (Accuracy Gate)
 notebooks/
   vllm_colab.ipynb  # clone repo, chạy setup + serve, test + benchmark
 baseline-and-input/
@@ -78,22 +79,37 @@ Tất cả tham số đều có giá trị mặc định, override bằng cách 
 | `SKIP_CUDA` | `0` | `1` để bỏ qua bước `apt install` CUDA runtime — dùng khi CUDA/driver đã được môi trường (vd máy chấm BTC) cung cấp sẵn |
 | `SKIP_PYTHON_DEPS` | `0` | `1` để bỏ qua bước cài torch/vllm |
 
-### `scripts/serve_vllm.sh`
+### `scripts/serve_from_compose.py` (khuyên dùng để verify trước khi nộp)
+
+Đọc thẳng `docker/docker-compose.yml` (`entrypoint` + `command` của service `model`) và khởi động vllm với **đúng 100% flag sẽ nộp cho BTC** — chỉ thay `--model=/model` bằng một HF repo id (vì `/model` chỉ tồn tại trong container thật của BTC). Đây là cách duy nhất đảm bảo không bị lệch giữa "cái test trên Colab" và "cái nộp thật" — từng xảy ra thật: `--swap-space`/`--disable-log-requests` đã đổi trong `docker-compose.yml` nhưng quên sửa `serve_vllm.sh`, dẫn tới test trên Colab "chạy được" trong khi bản nộp thật bị lỗi `unrecognized arguments`.
+
+```bash
+pip install pyyaml   # thuong co san tren Colab
+
+python3 scripts/serve_from_compose.py --model-override Qwen/Qwen3.5-2B
+```
+
+Đổi flag ở `docker/docker-compose.yml` là **nơi duy nhất** cần sửa — script này tự đọc lại, không cần sửa gì thêm.
+
+### `scripts/serve_vllm.sh` (test nhanh, thủ công)
+
+Dùng khi muốn thử nhanh 1 flag riêng lẻ trước khi quyết định đưa vào `docker-compose.yml` (vd thử `KV_CACHE_DTYPE=fp8` xem có boot được không trước khi cam kết). **Không phải nguồn sự thật** — sau khi quyết định giữ flag nào, phải tự tay thêm vào `docker/docker-compose.yml` rồi dùng `serve_from_compose.py` để verify lại.
 
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
 | `MODEL_NAME` | `Qwen/Qwen3.5-2B` | Model để load (HuggingFace repo id, dùng cho `--model`) |
 | `SERVED_MODEL_NAME` | `Qwen3.5-2B` | Tên model client gọi qua API (`--served-model-name`) — phải khớp field `"model"` trong request/trace, KHÔNG phải HF repo id |
-| `MAX_MODEL_LEN` | `262144` | Context length tối đa (khớp baseline compose). Rất tốn KV cache trên GPU nhỏ — giảm giá trị này khi test trên Colab nếu OOM |
+| `MAX_MODEL_LEN` | `65536` | Context length tối đa. Đã tính từ độ dài thật của `trace-round1.jsonl` (request dài nhất ~167K ký tự ≈ 42-56K token) — xem mục "Tối ưu áp dụng cho vòng 1" |
 | `HOST` | `0.0.0.0` | Bind host |
 | `PORT` | `8000` | Bind port |
 | `GPU_MEMORY_UTILIZATION` | `0.85` | Tỷ lệ VRAM vllm được phép dùng. Trên Colab (GPU dành riêng, thường >18GB) để 0.85 là an toàn; khi mô phỏng đúng MiG 18GB có thể cần theo sát baseline (`0.95`) |
 | `TENSOR_PARALLEL_SIZE` | `1` | Khớp baseline compose (1 GPU/MiG instance, không có multi-GPU) |
 | `ENABLE_PREFIX_CACHING` | `1` | `0` để tắt (`--no-enable-prefix-caching`) — dùng khi cần A/B so sánh có/không prefix caching. Xem mục "Tối ưu áp dụng cho vòng 1" để biết vì sao flag này quan trọng với trace thật. |
-| `SWAP_SPACE` | `1` (GiB) | Mặc định vLLM là 4 GiB — quá nhiều so với 8GB RAM của MiG slice thật, hạ xuống 1 để tránh OOM container. |
-| `DISABLE_LOG_REQUESTS` | `1` | Tắt log từng request để giảm overhead, không ảnh hưởng serving. Set `0` nếu cần debug chi tiết log request. |
+| `DISABLE_LOG_REQUESTS` | `1` | Set flag `--no-enable-log-requests` (tên đúng trong bản vllm hiện dùng — `--disable-log-requests` cũ đã bị đổi tên, gây lỗi thật khi BTC chạy). Set `0` nếu cần debug chi tiết log request. |
 | `KV_CACHE_DTYPE` | *(rỗng = `auto`)* | Set `fp8` để quantize KV cache (Statement.txt mục 3: KV Cache & Memory) — có thể ảnh hưởng accuracy, **luôn chấm lại bằng `scripts/eval_gpqa.py` sau khi bật** trước khi coi là chính thức. |
 | `VLLM_EXTRA_ARGS` | *(rỗng)* | Chuỗi tham số bổ sung truyền thẳng cho `vllm.entrypoints.openai.api_server` (vd `--quantization fp8`) |
+
+**Lưu ý:** phiên bản vllm mới đã bỏ hẳn `--swap-space` (kiến trúc engine V1 không còn swap KV cache ra CPU RAM, dùng recompute khi preempt) — script không còn set flag này.
 
 Script cũng nhận thêm tham số dòng lệnh trực tiếp, vd:
 
