@@ -26,32 +26,33 @@ services:
       - --served-model-name=Qwen3.5-2B #Don't change this to vllm-server
       - --host=0.0.0.0 #Don't change this to vllm-server
       - --port=8000 #Don't change this to vllm-server
-      - --max-model-len=262144
+      - --max-model-len=65536
       - --gpu-memory-utilization=0.95
       - --tensor-parallel-size=1
-      # Prefix caching: TRACE-ROUND1 CO 120 REQUEST NHUNG CHI 20 TO HOP
-      # (system+user) DOC NHAT, moi to hop lap lai dung 6 lan (da verify bang
-      # cach hash tung request trong trace-round1.jsonl). System prompt
-      # (~39K ky tu) giong het nhau o CA 120 request. Nghia la sau lan dau,
-      # 100/120 request se duoc prefix-cache-hit gan nhu toan bo prompt ->
-      # giam TTFT rat manh. Day la toi uu quan trong nhat cho trace nay.
+      # Prefix caching: trace-round1.jsonl la 20 luong hoi thoai multi-turn,
+      # moi luong duoc replay o 6 do dai tang dan (2,4,6,8,10,12 message) -
+      # da verify: ban dai hon LUON bang dung ban ngan hon + 2 message noi
+      # them (prefix khop tuyet doi, khong chi giong dau). Nghia la voi moi
+      # luong, sau request dau tien, cac request sau co the tai su dung toan
+      # bo KV cache da tinh truoc do, chi can tinh phan moi noi them - giam
+      # TTFT rat manh. Day la toi uu quan trong nhat cho trace nay.
       - --enable-prefix-caching
-      # Swap-space (CPU offload cho KV cache khi preempt) mac dinh cua vllm
-      # la 4 GiB - qua nhieu so voi RAM chi 8GB cua MiG slice (Statement.txt
-      # muc 1: "3 Core CPU, 8GB RAM"), co the gay OOM container. Ha xuong 1
-      # GiB de an toan; voi trace nay (120 request, it unique, khong can qua
-      # nhieu preemption) 1 GiB la du du.
-      - --swap-space=1
+      # --swap-space DA BI BO: khong con ton tai trong CLI cua ban vllm nay
+      # (kien truc engine V1 khong con swap KV cache ra CPU RAM kieu cu, dung
+      # recompute khi preempt thay vi swap) - dung flag nay gay loi
+      # "unrecognized arguments" khi BTC chay that, da xac nhan bang log that.
+      #
       # Tat log tung request de giam overhead Python o tan so cao (khong anh
       # huong toi accuracy/latency serving, chi giam noise/CPU cho logging).
-      - --disable-log-requests
-      # KV cache FP8: CHUA BAT o day. Vi trace chi co 20 chuoi prompt doc
-      # nhat (khong phai 120), ap luc VRAM thuc te thap hon ve tuong tuong
-      # ban dau tu 262144 max-model-len. Bat --kv-cache-dtype=fp8 co the anh
-      # huong Accuracy Gate (Delta phai <=0.10) - CHI bat sau khi da chay
-      # scripts/eval_gpqa.py xac nhan van qua nguong. Bo comment dong duoi
-      # khi da test xong:
-      # - --kv-cache-dtype=fp8
+      # Ten flag cung doi (--disable-log-requests cu bi loi, ten dung la
+      # --no-enable-log-requests, dang BooleanOptionalAction):
+      - --no-enable-log-requests
+      # KV cache FP8: DANG BAT THU (chua chay scripts/eval_gpqa.py de xac
+      # nhan Accuracy Gate van qua nguong - Delta phai <=0.10). Day la thay
+      # doi co rui ro that voi chat luong dau ra. TRUOC KHI NOP BAN CHINH
+      # THUC, phai chay eval_gpqa.py de kiem tra; neu khong qua duoc, comment
+      # dong duoi lai:
+      - --kv-cache-dtype=fp8
     ports:
       - "8000:8000"
     shm_size: "2g"
