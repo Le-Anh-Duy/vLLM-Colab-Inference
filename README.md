@@ -9,7 +9,7 @@ Workflow: code/script được viết và version-control ở đây (local), sau
 - **Vòng 1 sơ loại** (02/07 - 30/07/2026): serve `Qwen/Qwen3.5-2B` xử lý file trace 120 request (`baseline-and-input/trace-round1.jsonl`), tối đa hoá **ERS** trong khi vẫn qua **Accuracy Gate** (GPQA Diamond). Xem đầy đủ ở [`Statement.txt`](Statement.txt).
 - **Hạ tầng chấm điểm thật:** mỗi lượt chấm chỉ được cấp **1 lát MiG H200: 18GB VRAM, 3 CPU, 8GB RAM** — không phải full H200. Nộp bài bằng cách push Docker image public lên Docker Hub + nộp `docker-compose.yml` cho BTC pull về chạy tự động (xem mục "Nộp bài bằng Docker" bên dưới). File compose mẫu của BTC: `baseline-and-input/docker-compose-baseline.yml`.
 - **Ngưỡng điểm vòng 1 (đã là số thật, không còn placeholder):** `F_ttft=100ms, C_ttft=1500ms, F_tpot=20ms, C_tpot=45ms, γ=2, w=0.5`; Accuracy Gate: `baseline_accuracy=0.4` (thang 0..1), phạt bắt đầu từ `Δ>0.10`, về 0 điểm accuracy ở `Δ≥0.16`.
-- **Hệ quả quan trọng:** `--max-model-len=262144` (262K context) trên chỉ 18GB VRAM là rất căng — KV cache quantization (FP8/INT8) gần như bắt buộc chứ không còn là tối ưu tuỳ chọn, nếu không sẽ không đủ chỗ cho KV cache ở context dài với bất kỳ concurrency nào.
+- **Hệ quả quan trọng:** `--max-model-len=262144` (262K context) trên chỉ 18GB VRAM nghe rất căng, nhưng đã phân tích `trace-round1.jsonl` và phát hiện **chỉ có 20 tổ hợp (system+user) prompt độc nhất trong 120 request** (system prompt ~39K ký tự giống hệt ở cả 120 request; user prompt có 20 biến thể, mỗi cái lặp 6 lần) — nên áp lực VRAM thực tế thấp hơn nhiều so với tưởng tượng ban đầu, và **prefix caching** mới là đòn bẩy quan trọng nhất (xem mục "Tối ưu áp dụng cho vòng 1" bên dưới), không phải KV cache quantization.
 - Colab (T4/L4/A100 tuỳ phiên) chỉ dùng để dev/thử nghiệm nhanh — VRAM thường **nhiều hơn** 18GB của MiG slice thật, nên test "chạy được trên Colab" không đảm bảo chạy được trên máy chấm; khi cần mô phỏng sát VRAM 18GB, giảm `MAX_MODEL_LEN` hoặc bật `KV_CACHE_DTYPE=fp8`.
 - vLLM có publish wheel cho một vài bản CUDA cụ thể qua GitHub Releases (vd `+cu129`), nhưng **mỗi version chỉ có một số biến thể nhất định** — không phải version nào cũng có `+cu128`/`+cu130`. Luôn kiểm tra asset thật tại `https://github.com/vllm-project/vllm/releases/tag/v<VLLM_VERSION>` trước khi đổi `CUDA_VERSION` cho kịch bản B/C.
 
@@ -89,8 +89,10 @@ Tất cả tham số đều có giá trị mặc định, override bằng cách 
 | `PORT` | `8000` | Bind port |
 | `GPU_MEMORY_UTILIZATION` | `0.85` | Tỷ lệ VRAM vllm được phép dùng. Trên Colab (GPU dành riêng, thường >18GB) để 0.85 là an toàn; khi mô phỏng đúng MiG 18GB có thể cần theo sát baseline (`0.95`) |
 | `TENSOR_PARALLEL_SIZE` | `1` | Khớp baseline compose (1 GPU/MiG instance, không có multi-GPU) |
-| `ENABLE_PREFIX_CACHING` | `1` | `0` để tắt (`--no-enable-prefix-caching`) — dùng khi cần A/B so sánh có/không prefix caching. |
-| `KV_CACHE_DTYPE` | *(rỗng = `auto`)* | Set `fp8` để quantize KV cache (Statement.txt mục 3: KV Cache & Memory) — gần như bắt buộc với context 262K trên 18GB VRAM, nhưng có thể ảnh hưởng accuracy, **luôn chấm lại bằng `scripts/eval_gpqa.py` sau khi bật**. |
+| `ENABLE_PREFIX_CACHING` | `1` | `0` để tắt (`--no-enable-prefix-caching`) — dùng khi cần A/B so sánh có/không prefix caching. Xem mục "Tối ưu áp dụng cho vòng 1" để biết vì sao flag này quan trọng với trace thật. |
+| `SWAP_SPACE` | `1` (GiB) | Mặc định vLLM là 4 GiB — quá nhiều so với 8GB RAM của MiG slice thật, hạ xuống 1 để tránh OOM container. |
+| `DISABLE_LOG_REQUESTS` | `1` | Tắt log từng request để giảm overhead, không ảnh hưởng serving. Set `0` nếu cần debug chi tiết log request. |
+| `KV_CACHE_DTYPE` | *(rỗng = `auto`)* | Set `fp8` để quantize KV cache (Statement.txt mục 3: KV Cache & Memory) — có thể ảnh hưởng accuracy, **luôn chấm lại bằng `scripts/eval_gpqa.py` sau khi bật** trước khi coi là chính thức. |
 | `VLLM_EXTRA_ARGS` | *(rỗng)* | Chuỗi tham số bổ sung truyền thẳng cho `vllm.entrypoints.openai.api_server` (vd `--quantization fp8`) |
 
 Script cũng nhận thêm tham số dòng lệnh trực tiếp, vd:
@@ -139,6 +141,28 @@ python3 scripts/eval_gpqa.py --hf-fallback --num-questions 100
 **Lưu ý đơn vị:** accuracy và `--baseline-accuracy` dùng thang **0..1** (khớp Statement.txt: `baseline_accuracy` mặc định `0.4` = 40%), không phải phần trăm 0..100. Mặc định `--baseline-accuracy` đã là `0.4`. Kết quả in accuracy + `Δ` + hệ số phạt `f(Δ)` ra console, ghi chi tiết vào `gpqa_results/summary.json` + `per_question.csv` (kèm câu trả lời thô của model để soát lại khi cần).
 
 **Khi BTC công bố file 100 câu hỏi chính thức:** chỉ cần trỏ `--questions-file` vào file đó, không sửa code. `scripts/scoring.py` chứa chung công thức `f(Δ)` và `clamp01` dùng bởi cả `benchmark_traffic.py` và `eval_gpqa.py`.
+
+## Tối ưu áp dụng cho vòng 1 (và vì sao)
+
+Phân tích `baseline-and-input/trace-round1.jsonl` (120 request) cho ra phát hiện quan trọng, quyết định hướng tối ưu:
+
+- **System prompt giống hệt nhau ở cả 120/120 request** (~39.000 ký tự).
+- **Chỉ 20 user prompt khác nhau, mỗi cái lặp lại đúng 6 lần** → tổng cộng chỉ **20 tổ hợp (system+user) độc nhất** trong 120 request, không phải 120 tổ hợp riêng biệt.
+- Trace được thiết kế gần như chắc chắn để đo hiệu quả **prefix caching**: sau lần đầu tiên của mỗi tổ hợp, 5 lần lặp lại tiếp theo có thể gần như cache-hit toàn bộ phần input, TTFT giảm rất mạnh (ảnh hưởng trực tiếp tới ERS vì `w=0.5` cho TTFT).
+
+Flag đã bật trong `docker/docker-compose.yml` + `scripts/serve_vllm.sh`, kèm lý do:
+
+| Flag | Trạng thái | Vì sao |
+|---|---|---|
+| `--enable-prefix-caching` | **Bật** | Đòn bẩy quan trọng nhất cho trace này — đã verify bằng data thật (xem trên), không phải suy đoán chung chung. Rủi ro accuracy = 0 (chỉ tái sử dụng KV state, không đổi kết quả tính toán). |
+| `--swap-space=1` (giảm từ mặc định 4 GiB) | **Bật** | MiG slice chỉ có **8GB RAM** (Statement.txt mục 1). Swap-space mặc định của vLLM (4 GiB, dùng để offload KV cache xuống CPU khi preempt) chiếm tới nửa RAM khả dụng — rủi ro container bị OOM-kill. Hạ xuống 1 GiB vì trace ít unique prompt, không cần preempt nhiều. |
+| `--disable-log-requests` | **Bật** | Giảm overhead logging Python ở tần suất cao, không ảnh hưởng accuracy/latency serving thực chất. Lợi ích nhỏ nhưng không có rủi ro. |
+| `--kv-cache-dtype=fp8` | **Chưa bật** (để comment sẵn trong compose) | Ban đầu tưởng "gần như bắt buộc" do 262K context trên 18GB VRAM, nhưng phân tích trace cho thấy áp lực VRAM thực tế thấp hơn nhiều (chỉ 20 chuỗi unique cần cache, không phải 120). Vì đây là thay đổi có rủi ro thật với Accuracy Gate (`Δ` phải ≤0.10), **chỉ bật sau khi chạy `scripts/eval_gpqa.py` xác nhận vẫn qua ngưỡng** — không tự ý bật khi chưa đo được. |
+| Response/semantic caching cho toàn bộ output | **Không làm** | Statement.txt liệt kê "Semantic caching" là kỹ thuật được phép, nhưng đồng thời cấm tuyệt đối "Pre-compute response cho các request nằm trong trace" (mục Rule & Anti-Cheating). Với dữ liệu lặp lại rõ như thế này, ranh giới giữa "semantic caching hợp lệ" và "học thuộc trace để gian lận" rất mong manh — **cố tình không đụng vào hướng này** cho đến khi có câu trả lời rõ ràng từ BTC về ranh giới cho phép. |
+
+vLLM version dùng để build: `v0.24.0` (không phải `v0.22.1` baseline của BTC — Statement.txt mục 3 cho phép tự do chọn framework/version, và `v0.24.0` đã chạy ổn định trên Colab với cùng entrypoint `python3 -m vllm.entrypoints.openai.api_server` mà BTC yêu cầu).
+
+**Việc còn cần làm trước khi nộp thật:** chạy `scripts/benchmark_traffic.py --trace-file baseline-and-input/trace-round1.jsonl` để đo ERS thật với cấu hình này, và `scripts/eval_gpqa.py` để xác nhận Accuracy Gate — hiện chưa có số đo thực tế nào, các quyết định trên chỉ dựa trên phân tích trace + lý thuyết.
 
 ## Nộp bài bằng Docker
 

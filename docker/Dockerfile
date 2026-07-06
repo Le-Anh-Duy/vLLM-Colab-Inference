@@ -2,9 +2,14 @@
 #
 # Bake san model weights vao image LUC BUILD (khong tai luc container chay)
 # de tuan thu luat anti-cheat: "Khong goi network external tu inference
-# server trong qua trinh serving" (Statement.txt). Base image la ban BTC
-# dung lam baseline (vllm/vllm-openai:v0.22.1) de dam bao tuong thich voi
-# entrypoint/CLI flags trong docker-compose.yml.
+# server trong qua trinh serving" (Statement.txt).
+#
+# BTC dung vllm/vllm-openai:v0.22.1 lam baseline THAM KHAO, nhung Statement.txt
+# muc 3 cho phep tu do chon framework/version. Da tung chay on dinh voi vllm
+# 0.24.0 tren Colab (cung entrypoint "python3 -m
+# vllm.entrypoints.openai.api_server" ma BTC yeu cau), va vllm/vllm-openai:
+# v0.24.0 co san tren Docker Hub - nen dung ban nay de co cac cai tien/fix moi
+# hon 0.22.1.
 #
 # Build (tu thu muc goc repo, vi context can bao gom ca thu muc docker/):
 #   docker build -f docker/Dockerfile -t <dockerhub-user>/<repo>:latest .
@@ -12,7 +17,7 @@
 # Trong thuc te build chay tren GitHub Actions (xem
 # .github/workflows/docker-build-push.yml), khong can Docker cai o may local.
 
-FROM vllm/vllm-openai:v0.22.1
+FROM vllm/vllm-openai:v0.24.0
 
 # Model public tren HuggingFace, khong can token. Khi BTC cong bo hash commit
 # co dinh, doi MODEL_REVISION cho khop (hien tai dung "main").

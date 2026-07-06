@@ -21,10 +21,29 @@ services:
       - --max-model-len=262144
       - --gpu-memory-utilization=0.95
       - --tensor-parallel-size=1
+      # Prefix caching: TRACE-ROUND1 CO 120 REQUEST NHUNG CHI 20 TO HOP
+      # (system+user) DOC NHAT, moi to hop lap lai dung 6 lan (da verify bang
+      # cach hash tung request trong trace-round1.jsonl). System prompt
+      # (~39K ky tu) giong het nhau o CA 120 request. Nghia la sau lan dau,
+      # 100/120 request se duoc prefix-cache-hit gan nhu toan bo prompt ->
+      # giam TTFT rat manh. Day la toi uu quan trong nhat cho trace nay.
       - --enable-prefix-caching
-      # Cho tham so toi uu them vao day sau khi da verify submission chay
-      # duoc (vd --kv-cache-dtype=fp8) - luon chay lai scripts/eval_gpqa.py
-      # de xac nhan Accuracy Gate van qua truoc khi coi la ban nop chinh thuc.
+      # Swap-space (CPU offload cho KV cache khi preempt) mac dinh cua vllm
+      # la 4 GiB - qua nhieu so voi RAM chi 8GB cua MiG slice (Statement.txt
+      # muc 1: "3 Core CPU, 8GB RAM"), co the gay OOM container. Ha xuong 1
+      # GiB de an toan; voi trace nay (120 request, it unique, khong can qua
+      # nhieu preemption) 1 GiB la du du.
+      - --swap-space=1
+      # Tat log tung request de giam overhead Python o tan so cao (khong anh
+      # huong toi accuracy/latency serving, chi giam noise/CPU cho logging).
+      - --disable-log-requests
+      # KV cache FP8: CHUA BAT o day. Vi trace chi co 20 chuoi prompt doc
+      # nhat (khong phai 120), ap luc VRAM thuc te thap hon ve tuong tuong
+      # ban dau tu 262144 max-model-len. Bat --kv-cache-dtype=fp8 co the anh
+      # huong Accuracy Gate (Delta phai <=0.10) - CHI bat sau khi da chay
+      # scripts/eval_gpqa.py xac nhan van qua nguong. Bo comment dong duoi
+      # khi da test xong:
+      # - --kv-cache-dtype=fp8
     ports:
       - "8000:8000"
     shm_size: "2g"

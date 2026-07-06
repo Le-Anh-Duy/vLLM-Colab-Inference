@@ -24,13 +24,14 @@ GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
 TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
 VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 
-# Cac toggle toi uu (Statement.txt muc 3: KV Cache & Memory). Mac dinh giu
-# prefix caching bat (khop baseline compose), KV_CACHE_DTYPE rong = "auto".
-# Bat KV_CACHE_DTYPE=fp8 de thu quantize KV cache - kiem tra accuracy bang
-# scripts/eval_gpqa.py truoc khi coi day la optimization chinh thuc, vi day
-# la thay doi co the anh huong chat luong dau ra.
+# Cac toggle toi uu (Statement.txt muc 3: KV Cache & Memory), khop voi
+# docker/docker-compose.yml de hanh vi test tren Colab phan anh dung ban se
+# nop. Xem giai thich chi tiet (vi sao bat/tat tung cai) trong comment cua
+# docker/docker-compose.yml.
 ENABLE_PREFIX_CACHING="${ENABLE_PREFIX_CACHING:-1}"
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-}"
+SWAP_SPACE="${SWAP_SPACE:-1}"
+DISABLE_LOG_REQUESTS="${DISABLE_LOG_REQUESTS:-1}"
 
 PREFIX_CACHING_FLAG="--enable-prefix-caching"
 if [ "$ENABLE_PREFIX_CACHING" = "0" ]; then
@@ -42,6 +43,11 @@ if [ -n "$KV_CACHE_DTYPE" ]; then
   KV_CACHE_DTYPE_FLAG=(--kv-cache-dtype "$KV_CACHE_DTYPE")
 fi
 
+DISABLE_LOG_REQUESTS_FLAG=()
+if [ "$DISABLE_LOG_REQUESTS" = "1" ]; then
+  DISABLE_LOG_REQUESTS_FLAG=(--disable-log-requests)
+fi
+
 echo "========================================"
 echo "DANG KHOI DONG VLLM API SERVER..."
 echo "  model             = ${MODEL_NAME}"
@@ -50,6 +56,7 @@ echo "  max-model-len     = ${MAX_MODEL_LEN}"
 echo "  host              = ${HOST}"
 echo "  port              = ${PORT}"
 echo "  gpu-mem-util      = ${GPU_MEMORY_UTILIZATION}"
+echo "  swap-space        = ${SWAP_SPACE} GiB"
 echo "  prefix caching    = ${ENABLE_PREFIX_CACHING}"
 echo "  kv cache dtype    = ${KV_CACHE_DTYPE:-auto}"
 echo "========================================"
@@ -62,6 +69,8 @@ python3 -m vllm.entrypoints.openai.api_server \
   --max-model-len "$MAX_MODEL_LEN" \
   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
   --tensor-parallel-size "$TENSOR_PARALLEL_SIZE" \
+  --swap-space "$SWAP_SPACE" \
   "$PREFIX_CACHING_FLAG" \
   "${KV_CACHE_DTYPE_FLAG[@]}" \
+  "${DISABLE_LOG_REQUESTS_FLAG[@]}" \
   $VLLM_EXTRA_ARGS "$@"
