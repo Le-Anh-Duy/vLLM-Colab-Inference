@@ -39,6 +39,11 @@ notebooks/
 baseline-and-input/
   trace-round1.jsonl            # trace 120 request thật của BTC (vòng 1)
   docker-compose-baseline.yml   # compose mẫu của BTC (tham khảo, không sửa)
+docker/
+  Dockerfile          # bake weights Qwen3.5-2B vào image lúc build
+  docker-compose.yml  # file nộp cho BTC, trỏ vào image trên Docker Hub
+.github/workflows/
+  docker-build-push.yml  # build + push image lên Docker Hub qua GitHub Actions
 ```
 
 ## Sử dụng trên Colab
@@ -135,13 +140,39 @@ python3 scripts/eval_gpqa.py --hf-fallback --num-questions 100
 
 **Khi BTC công bố file 100 câu hỏi chính thức:** chỉ cần trỏ `--questions-file` vào file đó, không sửa code. `scripts/scoring.py` chứa chung công thức `f(Δ)` và `clamp01` dùng bởi cả `benchmark_traffic.py` và `eval_gpqa.py`.
 
-## Nộp bài bằng Docker (chưa triển khai — kế hoạch)
+## Nộp bài bằng Docker
 
 Quy trình nộp bài của BTC: đóng gói giải pháp thành Docker image → push lên Docker Hub public → nộp `docker-compose.yml` trỏ vào image đó qua Portal → BTC tự pull về chạy trên MiG H200 và benchmark.
 
-Vì không muốn cài Docker cục bộ, hướng dự kiến:
-- **Build & push image:** dùng GitHub Actions (runner Ubuntu có sẵn Docker daemon) để build Dockerfile (bake sẵn weights model vào image lúc build — tránh gọi mạng ngoài lúc serving, đúng luật anti-cheat) rồi push thẳng lên Docker Hub bằng access token, không cần tải gì về máy.
-- **Test hành vi/tối ưu:** vẫn dùng Colab/Kaggle như hiện tại (không cần Docker) — miễn CLI flags + version vLLM khớp với `docker-compose.yml`, kết quả hành vi tương đương vì Docker chỉ là lớp đóng gói.
-- **Giới hạn:** GitHub Actions free runner không có GPU nên không chạy được benchmark GPU thật trong CI — CI chỉ đảm bảo image build thành công + container boot/health-check được; phần hành vi/hiệu năng đã được xác nhận riêng qua Colab.
+```
+docker/
+  Dockerfile          # FROM vllm/vllm-openai:v0.22.1, bake weights Qwen3.5-2B luc build
+  docker-compose.yml  # nop cho BTC - mirror docker-compose-baseline.yml, tro ve image cua minh
+.github/workflows/
+  docker-build-push.yml  # build + push image len Docker Hub, chay tren GitHub Actions
+```
 
-Docker Hub username: `duylemeow`. Chưa có Dockerfile/GitHub Actions workflow — sẽ bổ sung ở bước tiếp theo.
+**Không cần cài Docker cục bộ** — build chạy trên GitHub Actions (runner Ubuntu có sẵn Docker daemon), bake sẵn weights model vào image lúc build (tránh gọi mạng ngoài lúc serving, đúng luật anti-cheat "không pull model dynamically"), rồi push thẳng lên Docker Hub bằng access token.
+
+### Setup 1 lần: thêm Docker Hub secrets vào GitHub repo
+
+1. Đăng nhập [Docker Hub](https://hub.docker.com) (user `duylemeow`) → **Account Settings → Security → New Access Token** → đặt tên (vd `github-actions`), quyền `Read & Write` → copy token (chỉ hiện 1 lần).
+2. Vào repo trên GitHub → **Settings → Secrets and variables → Actions → New repository secret**, tạo 2 secret:
+   - `DOCKERHUB_USERNAME` = `duylemeow`
+   - `DOCKERHUB_TOKEN` = token vừa tạo ở bước 1
+3. Xong — không cần làm lại trừ khi token hết hạn/bị thu hồi.
+
+### Chạy build
+
+Vào tab **Actions** trên GitHub → chọn workflow **"Build and push Docker image"** → **Run workflow** (nhánh chứa `docker/`). Workflow cũng tự chạy khi có thay đổi trong `docker/**` được push lên `main`.
+
+Build sẽ mất một lúc (tải base image ~10GB+ + tải weights Qwen3.5-2B) — theo dõi log trực tiếp trong tab Actions. Xong, image xuất hiện tại `hub.docker.com/r/duylemeow/vllm-qwen35-2b`.
+
+**Giới hạn quan trọng:** GitHub Actions free runner **không có GPU**, nên CI chỉ smoke-test được `import vllm` + kiểm tra `/model` có file (bake weight thành công), **không** chạy được benchmark suy luận thật. Hành vi/hiệu năng/optimization vẫn phải xác nhận riêng qua Colab (CLI flags giống hệt `docker/docker-compose.yml`) trước khi build — Docker chỉ là lớp đóng gói cuối cùng.
+
+### Trước khi nộp thật
+
+1. Đảm bảo mọi flag tối ưu (kv-cache-dtype, quantization...) đã test qua `scripts/benchmark_traffic.py` + `scripts/eval_gpqa.py` trên Colab và pass Accuracy Gate.
+2. Copy đúng các flag đó vào `command:` trong `docker/docker-compose.yml` (giữ nguyên các dòng có comment "Don't change this to vllm-server").
+3. Chạy workflow build + push.
+4. Nộp `docker/docker-compose.yml` qua Portal của BTC.

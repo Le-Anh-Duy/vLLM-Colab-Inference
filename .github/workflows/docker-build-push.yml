@@ -1,0 +1,58 @@
+name: Build and push Docker image
+
+# Build khong can Docker/GPU cai o may local - runner GitHub da co san Docker
+# daemon. Chay thu cong (workflow_dispatch) hoac tu dong khi doi Dockerfile
+# tren nhanh main. CI KHONG co GPU nen chi smoke-test import (khong chay
+# duoc full inference) - hanh vi/hieu nang van xac nhan rieng qua Colab.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "docker/**"
+      - ".github/workflows/docker-build-push.yml"
+
+env:
+  IMAGE_NAME: duylemeow/vllm-qwen35-2b
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free up disk space (image + weights can be 15-20GB)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          docker-images: false
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Smoke-test image (CPU-only import + weight check, khong co GPU o CI)
+        run: |
+          docker run --rm --entrypoint python3 "${{ env.IMAGE_NAME }}:latest" -c "
+          import vllm, os
+          print('vllm version:', vllm.__version__)
+          files = os.listdir('/model')
+          assert files, '/model rong - buoc bake weight co the da fail'
+          print('so file trong /model:', len(files))
+          "

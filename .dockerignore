@@ -1,0 +1,14 @@
+.git/
+.github/
+notebooks/
+running_results/
+benchmark_results/
+gpqa_results/
+Statement.txt
+README.md
+.gitignore
+.gitattributes
+__pycache__/
+.ipynb_checkpoints/
+*.pyc
+*.log

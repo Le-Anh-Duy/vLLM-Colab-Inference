@@ -1,0 +1,37 @@
+# docker-compose.yml de nop cho BTC (Portal se doc file nay, tro image ve
+# Docker Hub public cua chung ta). Cau truc mirror dung
+# baseline-and-input/docker-compose-baseline.yml - cac dong danh dau
+# "Don't change this to vllm-server" la yeu cau bat buoc tu BTC, GIU NGUYEN.
+#
+# Doi ten image ben duoi sau khi workflow GitHub Actions push xong (xem
+# .github/workflows/docker-build-push.yml va README muc "Nop bai bang
+# Docker").
+services:
+  model:
+    image: duylemeow/vllm-qwen35-2b:latest
+    entrypoint:
+      - python3 #Don't change this to vllm-server
+      - -m  #Don't change this to vllm-server
+      - vllm.entrypoints.openai.api_server #Don't change this to vllm-server
+    command:
+      - --model=/model #Don't change this to vllm-server
+      - --served-model-name=Qwen3.5-2B #Don't change this to vllm-server
+      - --host=0.0.0.0 #Don't change this to vllm-server
+      - --port=8000 #Don't change this to vllm-server
+      - --max-model-len=262144
+      - --gpu-memory-utilization=0.95
+      - --tensor-parallel-size=1
+      - --enable-prefix-caching
+      # Cho tham so toi uu them vao day sau khi da verify submission chay
+      # duoc (vd --kv-cache-dtype=fp8) - luon chay lai scripts/eval_gpqa.py
+      # de xac nhan Accuracy Gate van qua truoc khi coi la ban nop chinh thuc.
+    ports:
+      - "8000:8000"
+    shm_size: "2g"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
