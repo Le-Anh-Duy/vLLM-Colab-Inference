@@ -1,8 +1,17 @@
 # Dong goi giai phap cho vong 1 so loai (Viettel AI Race 2026).
 #
-# Bake san model weights vao image LUC BUILD (khong tai luc container chay)
-# de tuan thu luat anti-cheat: "Khong goi network external tu inference
-# server trong qua trinh serving" (Statement.txt).
+# LUU Y: da xac nhan bang thuc nghiem la KHONG BAT BUOC dung Dockerfile nay -
+# nop thang docker-compose.yml voi image cong khai vllm/vllm-openai (khong
+# bake weight) van chay va ra diem, vi ha tang BTC tu cap /model cho container
+# (xem comment trong docker/docker-compose.yml). Dockerfile nay chi can thiet
+# khi giai phap co code/kernel rieng KHONG co san trong image goc (vd patch
+# vllm, custom kernel, thu vien them...). Neu optimization chi la CLI flags,
+# dung thang docker-compose.yml tro vao image cong khai la du, khong can build
+# gi ca.
+#
+# Neu van muon/can bake weights vao image LUC BUILD (khong tai luc container
+# chay) de tuan thu luat anti-cheat: "Khong goi network external tu inference
+# server trong qua trinh serving" (Statement.txt), dung Dockerfile nay.
 #
 # BTC dung vllm/vllm-openai:v0.22.1 lam baseline THAM KHAO, nhung Statement.txt
 # muc 3 cho phep tu do chon framework/version. Da tung chay on dinh voi vllm

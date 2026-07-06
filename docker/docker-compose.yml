@@ -1,14 +1,22 @@
-# docker-compose.yml de nop cho BTC (Portal se doc file nay, tro image ve
-# Docker Hub public cua chung ta). Cau truc mirror dung
-# baseline-and-input/docker-compose-baseline.yml - cac dong danh dau
-# "Don't change this to vllm-server" la yeu cau bat buoc tu BTC, GIU NGUYEN.
+# docker-compose.yml de nop cho BTC (Portal doc file nay, chay container tren
+# MiG H200). Cau truc mirror dung baseline-and-input/docker-compose-
+# baseline.yml - cac dong danh dau "Don't change this to vllm-server" la yeu
+# cau bat buoc tu BTC, GIU NGUYEN.
 #
-# Doi ten image ben duoi sau khi workflow GitHub Actions push xong (xem
-# .github/workflows/docker-build-push.yml va README muc "Nop bai bang
-# Docker").
+# QUAN TRONG - da xac nhan bang thuc nghiem: nop thang file baseline goc (image
+# vllm/vllm-openai:v0.22.1, KHONG co weight bake san) van chay va ra diem
+# (14.95), khong phai 0 (0 = loi/timeout theo cong thuc ERS). Nghia la ha tang
+# BTC TU CAP /model cho container (model co dinh chung cho moi doi, ho tu
+# mount, khong can tung doi tu tai/bake weight). Vi optimization hien tai chi
+# la CLI flags (khong sua code/kernel), KHONG can tu build image rieng -
+# tro thang vao image cong khai la du.
+#
+# Neu sau nay can code/kernel rieng (thu vien patch, custom kernel...) khong
+# co san trong image goc, luc do moi can quay lai dung docker/Dockerfile +
+# .github/workflows/docker-build-push.yml de tu build/push image rieng.
 services:
   model:
-    image: duylemeow/vllm-qwen35-2b:latest
+    image: vllm/vllm-openai:v0.24.0
     entrypoint:
       - python3 #Don't change this to vllm-server
       - -m  #Don't change this to vllm-server

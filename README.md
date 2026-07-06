@@ -160,43 +160,42 @@ Flag đã bật trong `docker/docker-compose.yml` + `scripts/serve_vllm.sh`, kè
 | `--kv-cache-dtype=fp8` | **Chưa bật** (để comment sẵn trong compose) | Ban đầu tưởng "gần như bắt buộc" do 262K context trên 18GB VRAM, nhưng phân tích trace cho thấy áp lực VRAM thực tế thấp hơn nhiều (chỉ 20 chuỗi unique cần cache, không phải 120). Vì đây là thay đổi có rủi ro thật với Accuracy Gate (`Δ` phải ≤0.10), **chỉ bật sau khi chạy `scripts/eval_gpqa.py` xác nhận vẫn qua ngưỡng** — không tự ý bật khi chưa đo được. |
 | Response/semantic caching cho toàn bộ output | **Không làm** | Statement.txt liệt kê "Semantic caching" là kỹ thuật được phép, nhưng đồng thời cấm tuyệt đối "Pre-compute response cho các request nằm trong trace" (mục Rule & Anti-Cheating). Với dữ liệu lặp lại rõ như thế này, ranh giới giữa "semantic caching hợp lệ" và "học thuộc trace để gian lận" rất mong manh — **cố tình không đụng vào hướng này** cho đến khi có câu trả lời rõ ràng từ BTC về ranh giới cho phép. |
 
-vLLM version dùng để build: `v0.24.0` (không phải `v0.22.1` baseline của BTC — Statement.txt mục 3 cho phép tự do chọn framework/version, và `v0.24.0` đã chạy ổn định trên Colab với cùng entrypoint `python3 -m vllm.entrypoints.openai.api_server` mà BTC yêu cầu).
+vLLM image dùng trong `docker-compose.yml`: `vllm/vllm-openai:v0.24.0` (không phải `v0.22.1` baseline của BTC — Statement.txt mục 3 cho phép tự do chọn framework/version, và `v0.24.0` đã chạy ổn định trên Colab với cùng entrypoint `python3 -m vllm.entrypoints.openai.api_server` mà BTC yêu cầu).
 
 **Việc còn cần làm trước khi nộp thật:** chạy `scripts/benchmark_traffic.py --trace-file baseline-and-input/trace-round1.jsonl` để đo ERS thật với cấu hình này, và `scripts/eval_gpqa.py` để xác nhận Accuracy Gate — hiện chưa có số đo thực tế nào, các quyết định trên chỉ dựa trên phân tích trace + lý thuyết.
 
 ## Nộp bài bằng Docker
 
-Quy trình nộp bài của BTC: đóng gói giải pháp thành Docker image → push lên Docker Hub public → nộp `docker-compose.yml` trỏ vào image đó qua Portal → BTC tự pull về chạy trên MiG H200 và benchmark.
+Quy trình nộp bài của BTC: nộp `docker-compose.yml` (trỏ vào 1 Docker image, entrypoint/command cụ thể) qua Portal → BTC tự pull image về và chạy trên MiG H200 để benchmark.
+
+**Phát hiện quan trọng (đã xác nhận bằng thực nghiệm):** nộp thẳng file baseline gốc của BTC (`image: vllm/vllm-openai:v0.22.1`, **không** có weight nào tự bake vào) vẫn chạy được và ra điểm **14.95** (không phải 0 — 0 mới là lỗi/timeout theo công thức ERS). Điều này cho thấy **hạ tầng BTC tự cấp `/model` cho container** (model cố định chung cho mọi đội, không cần mỗi đội tự tải/bake). Vì vậy:
+
+- **Nếu optimization chỉ là CLI flags** (như hiện tại: prefix caching, swap-space, disable-log-requests, kv-cache-dtype...) — **không cần tự build Docker image**. Chỉ cần nộp `docker/docker-compose.yml` trỏ thẳng vào image công khai `vllm/vllm-openai:v0.24.0` với flag đã tối ưu, y hệt cách baseline hoạt động.
+- **Chỉ khi nào cần code/kernel riêng** (patch vllm, custom CUDA/Triton kernel, thư viện thêm không có sẵn trong image gốc...) mới cần build image riêng — lúc đó dùng `docker/Dockerfile` (bake weight + code riêng) + `.github/workflows/docker-build-push.yml` (build/push qua GitHub Actions, không cần cài Docker cục bộ) làm phương án dự phòng đã chuẩn bị sẵn.
 
 ```
 docker/
-  Dockerfile          # FROM vllm/vllm-openai:v0.22.1, bake weights Qwen3.5-2B luc build
-  docker-compose.yml  # nop cho BTC - mirror docker-compose-baseline.yml, tro ve image cua minh
+  Dockerfile          # (du phong) FROM vllm/vllm-openai, bake weight + code rieng khi can
+  docker-compose.yml  # file nop THAT SU cho BTC - tro thang vao image cong khai
 .github/workflows/
-  docker-build-push.yml  # build + push image len Docker Hub, chay tren GitHub Actions
+  docker-build-push.yml  # (du phong) build + push image rieng len Docker Hub khi can
 ```
 
-**Không cần cài Docker cục bộ** — build chạy trên GitHub Actions (runner Ubuntu có sẵn Docker daemon), bake sẵn weights model vào image lúc build (tránh gọi mạng ngoài lúc serving, đúng luật anti-cheat "không pull model dynamically"), rồi push thẳng lên Docker Hub bằng access token.
+### Nộp bài (đường đi hiện tại — không cần build gì)
 
-### Setup 1 lần: thêm Docker Hub secrets vào GitHub repo
-
-1. Đăng nhập [Docker Hub](https://hub.docker.com) (user `duylemeow`) → **Account Settings → Security → New Access Token** → đặt tên (vd `github-actions`), quyền `Read & Write` → copy token (chỉ hiện 1 lần).
-2. Vào repo trên GitHub → **Settings → Secrets and variables → Actions → New repository secret**, tạo 2 secret:
-   - `DOCKERHUB_USERNAME` = `duylemeow`
-   - `DOCKERHUB_TOKEN` = token vừa tạo ở bước 1
-3. Xong — không cần làm lại trừ khi token hết hạn/bị thu hồi.
-
-### Chạy build
-
-Vào tab **Actions** trên GitHub → chọn workflow **"Build and push Docker image"** → **Run workflow** (nhánh chứa `docker/`). Workflow cũng tự chạy khi có thay đổi trong `docker/**` được push lên `main`.
-
-Build sẽ mất một lúc (tải base image ~10GB+ + tải weights Qwen3.5-2B) — theo dõi log trực tiếp trong tab Actions. Xong, image xuất hiện tại `hub.docker.com/r/duylemeow/vllm-qwen35-2b`.
-
-**Giới hạn quan trọng:** GitHub Actions free runner **không có GPU**, nên CI chỉ smoke-test được `import vllm` + kiểm tra `/model` có file (bake weight thành công), **không** chạy được benchmark suy luận thật. Hành vi/hiệu năng/optimization vẫn phải xác nhận riêng qua Colab (CLI flags giống hệt `docker/docker-compose.yml`) trước khi build — Docker chỉ là lớp đóng gói cuối cùng.
-
-### Trước khi nộp thật
-
-1. Đảm bảo mọi flag tối ưu (kv-cache-dtype, quantization...) đã test qua `scripts/benchmark_traffic.py` + `scripts/eval_gpqa.py` trên Colab và pass Accuracy Gate.
+1. Đảm bảo mọi flag tối ưu (`--kv-cache-dtype`, quantization...) đã test qua `scripts/benchmark_traffic.py` + `scripts/eval_gpqa.py` trên Colab và pass Accuracy Gate.
 2. Copy đúng các flag đó vào `command:` trong `docker/docker-compose.yml` (giữ nguyên các dòng có comment "Don't change this to vllm-server").
-3. Chạy workflow build + push.
-4. Nộp `docker/docker-compose.yml` qua Portal của BTC.
+3. Nộp `docker/docker-compose.yml` qua Portal của BTC — không cần Docker Hub, không cần GitHub Actions.
+
+### Khi nào mới cần build image riêng (dự phòng)
+
+Chỉ khi giải pháp có code/kernel không có sẵn trong image `vllm/vllm-openai` gốc. Lúc đó:
+
+1. Setup 1 lần — thêm Docker Hub secrets vào GitHub repo:
+   - Đăng nhập [Docker Hub](https://hub.docker.com) (user `duylemeow`) → **Account Settings → Security → New Access Token** → đặt tên (vd `github-actions`), quyền `Read & Write` → copy token (chỉ hiện 1 lần).
+   - Vào repo trên GitHub → **Settings → Secrets and variables → Actions → New repository secret**, tạo 2 secret: `DOCKERHUB_USERNAME=duylemeow`, `DOCKERHUB_TOKEN=<token>`.
+2. Vào tab **Actions** trên GitHub → chọn workflow **"Build and push Docker image"** → **Run workflow** (chọn đúng branch chứa `docker/`).
+3. Build mất một lúc (tải base image ~10GB+ + tải weights) — theo dõi log trong tab Actions. Xong, image tại `hub.docker.com/r/duylemeow/vllm-qwen35-2b`.
+4. Đổi `image:` trong `docker/docker-compose.yml` sang image vừa build, rồi nộp như bình thường.
+
+**Giới hạn:** GitHub Actions free runner không có GPU, CI chỉ smoke-test được `import vllm` + kiểm tra `/model` có file, không chạy được benchmark suy luận thật — hành vi/hiệu năng vẫn phải xác nhận riêng qua Colab trước.
